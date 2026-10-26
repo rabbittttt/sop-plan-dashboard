@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import re
+import xml.etree.ElementTree as ET
 
 from sop_store import ValidationError, catalog_name_key, display_version, text_field
 
@@ -18,6 +20,41 @@ def _blank(value):
     return None if value in (None, "") else value
 
 
+_VERTICAL_LABEL_MERGE = re.compile(r"^([AB])([1-9][0-9]*):\1([1-9][0-9]*)$")
+
+
+def _label_merges(sheet):
+    """Read A/B vertical merges from either a normal or read-only worksheet."""
+    if hasattr(sheet, "merged_cells"):
+        references = (str(area) for area in sheet.merged_cells.ranges)
+    else:
+        # Both upload and managed-workbook readers use openpyxl's read-only
+        # worksheets, which omit merged_cells. Walk only the already-open XLSX
+        # sheet part; the upload reader has already bounded ZIP/XML contents.
+        archive = sheet.parent._archive
+        path = sheet._worksheet_path
+        if archive.getinfo(path).file_size > 96 * 1024 * 1024:
+            raise ValidationError("主表文件过大，请缩小范围后重新导出。")
+        def from_xml():
+            count = 0
+            with archive.open(path) as source:
+                for _, element in ET.iterparse(source, events=("end",)):
+                    if element.tag.rsplit("}", 1)[-1] == "mergeCell":
+                        count += 1
+                        if count > 30000:
+                            raise ValidationError("主表合并区域过多，请缩小范围后重新导出。")
+                        yield element.attrib.get("ref", "")
+                    element.clear()
+        references = from_xml()
+    for reference in references:
+        match = _VERTICAL_LABEL_MERGE.fullmatch(reference)
+        if match:
+            column = 1 if match.group(1) == "A" else 2
+            start, end = int(match.group(2)), int(match.group(3))
+            if start >= 5 and end > start:
+                yield column, start, end
+
+
 def parse_inline_sheet(sheet, manifest):
     """Return plan inputs and catalog edits using an immutable server manifest.
 
@@ -32,8 +69,23 @@ def parse_inline_sheet(sheet, manifest):
     formulas = {(r, c) for r, row in enumerate(raw_rows, 1) for c, cell in enumerate(row, 1) if cell.data_type == "f"}
     if len(rows) > 15000 or sum(len(row) for row in rows) > 1_500_000:
         raise ValidationError("主表行数过多，请缩小范围后重新导出。")
+    # Excel stores a merged range's label only in its top-left cell. Recover
+    # that label for covered detail rows without treating ordinary blank cells
+    # as an implicit continuation of the preceding brand or model.
+    merged_labels = {}
+    for column, start, end in _label_merges(sheet):
+        if start > len(raw_rows):
+            continue
+        anchor = raw_rows[start - 1][column - 1]
+        for number in range(start, min(end, len(raw_rows)) + 1):
+            merged_labels[number, column] = (anchor.value, anchor.data_type == "f")
     def value(row, column):
         return _blank(row[column-1]) if column <= len(row) else None
+    def label_value(number, row, column):
+        raw = value(row, column)
+        if raw is not None:
+            return raw
+        return _blank(merged_labels.get((number, column), (None, False))[0])
     for offset, expected in enumerate(manifest["headers"]):
         row = rows[2 + offset] if len(rows) > 2 + offset else ()
         if [value(row, c) for c in range(1, width+1)] != [_blank(v) for v in expected]:
@@ -49,6 +101,10 @@ def parse_inline_sheet(sheet, manifest):
     original_names = {}
     for pid, product in products.items():
         original_names.setdefault(catalog_name_key(product), []).append(pid)
+    has_merged_detail_labels = any(
+        (match := _VERTICAL_LABEL_MERGE.fullmatch(reference)) and int(match.group(2)) >= 5
+        for reference in manifest.get("merges", ())
+    )
     month_columns = [c for c in manifest["columns"] if c["kind"] == "month"]
     allowed_new = set(manifest["manual_editable_months"])
     candidates, new_rows, locks, seen_nonplans = {}, [], [], set()
@@ -83,7 +139,16 @@ def parse_inline_sheet(sheet, manifest):
                 raise ValidationError(f"第 {number} 行缺少可信行标识。")
             if not any(labels) and not any(value(row, c["column"]) is not None for c in month_columns):
                 continue
-        if any((number, c) in formulas for c in (1, 2, 3)):
+        if original is not None:
+            labels = [label_value(number, row, c) for c in (1, 2, 3)]
+            if has_merged_detail_labels:
+                # Deleting a merged block's first version can remove its A/B
+                # anchor. The retained row's immutable ID still identifies its
+                # original brand/model; newly inserted rows have no such fallback.
+                for index, field in enumerate(("brand", "model")):
+                    if labels[index] is None:
+                        labels[index] = products[pid][field]
+        if any((number, c) in formulas or merged_labels.get((number, c), (None, False))[1] for c in (1, 2, 3)):
             raise ValidationError(f"第 {number} 行的品牌、车型和版本不能填写公式。")
         parsed_labels = {}
         for field, label, raw in zip(("brand", "model", "version"), ("品牌", "车型", "版本"), labels):

@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from sop_store import SOPStore, TZ
 from sop_workbook import WorkbookSync, _column
@@ -111,6 +112,55 @@ class InlineWorkbookTest(unittest.TestCase):
         self.assertTrue(next(r for r in self.spec()["rows"] if r.get("product_id") == "a")["hidden"])
         self.store.record_sales()
         self.assertFalse(self.products()["a"]["active"])
+
+    def test_merged_labels_reimport_and_deleting_anchor_keeps_other_version(self):
+        first, second = self.row("a"), self.row("b")
+        with zipfile.ZipFile(self.path) as archive:
+            sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        merges = {area.attrib["ref"] for area in sheet.findall(f".//{{{NS}}}mergeCell")}
+        self.assertIn(f"A{first}:A{second}", merges)
+        self.assertIn(f"B{first}:B{second}", merges)
+        self.assertIsNone(next(row for row in sheet.findall(f".//{{{NS}}}row")
+                               if row.attrib["r"] == str(second)).find(f"{{{NS}}}c[@r='A{second}']/{{{NS}}}is"))
+        edit_cell(self.path, f"{self.month_col('2026-10')}{second}", 17)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        self.assertEqual(self.plan("b")["sop"], 17)
+        change_rows(self.path, self.row("a"), delete=True)
+        result = self.sync.sync()
+        self.assertEqual(result["status"], "synced", result)
+        self.assertFalse(self.products()["a"]["active"])
+        self.assertTrue(self.products()["b"]["active"])
+        self.assertEqual(self.plan("b")["sop"], 17)
+
+    def test_new_row_without_explicit_brand_model_is_rejected(self):
+        row = self.row("b")
+        change_rows(self.path, row, insert={"C": "新增版本", self.month_col("2026-10"): 8})
+        result = self.sync.sync()
+        self.assertEqual(result["status"], "error", result)
+        self.assertEqual(len(self.products()), 2)
+
+    def test_previous_unmerged_layout_can_still_import(self):
+        ledger = self.store.db.execute("SELECT token, created_at, payload FROM workbook_exports").fetchone()
+        old = json.loads(ledger["payload"])
+        old["layout_version"] = "continuous-inline-v1"
+        spec = old["layout"]["sheets"][0]
+        spec["merges"] = [area for area in spec["merges"]
+                          if not ((match := re.fullmatch(r"([AB])(\d+):\1(\d+)", area))
+                                  and int(match.group(2)) >= 5)]
+        for item in spec["rows"]:
+            if item["kind"] == "product":
+                item["label_a"] = item["brand"]
+                item["label_b"] = item["model"]
+                item["labels"] = [item["brand"], item["model"], item["label_c"]]
+        token = uuid4().hex
+        self.store.db.execute("INSERT INTO workbook_exports (token, created_at, payload) VALUES (?,?,?)",
+                              (token, ledger["created_at"], json.dumps(old, ensure_ascii=False)))
+        fixture_writer({**old, "token": token, "generated_at": "legacy test",
+                        "output_path": str(self.path)})
+        edit_cell(self.path, f"{self.month_col('2026-10')}{self.row('b')}", 23)
+        result = self.sync.sync()
+        self.assertEqual(result["status"], "synced", result)
+        self.assertEqual(self.plan("b")["sop"], 23)
 
     def test_copy_row_then_change_name_creates_new_id(self):
         row = self.row("a")

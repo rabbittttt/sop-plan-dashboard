@@ -22,7 +22,7 @@ async function main() {
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) input += chunk;
   const data = JSON.parse(input.replace(/^\uFEFF/, ''));
-  if (!((data.schema_version === 3 && data.layout_version === 'continuous-blue-v1') || (data.schema_version === 4 && data.layout_version === 'continuous-blue-v2') || (data.schema_version === 5 && data.layout_version === 'continuous-inline-v1')) || !data.layout?.sheets?.length || !data.output_path || !data.token) throw new Error('A trusted continuous layout and export token are required');
+  if (!((data.schema_version === 3 && data.layout_version === 'continuous-blue-v1') || (data.schema_version === 4 && data.layout_version === 'continuous-blue-v2') || (data.schema_version === 5 && ['continuous-inline-v1','continuous-inline-v2'].includes(data.layout_version))) || !data.layout?.sheets?.length || !data.output_path || !data.token) throw new Error('A trusted continuous layout and export token are required');
   const inline = data.schema_version === 5;
   const output = path.resolve(data.output_path);
   const plans = new Map(data.plans.map(p => [key(p.product_id, p.month), quantity(p.sop)]));

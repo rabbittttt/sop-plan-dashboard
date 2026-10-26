@@ -19,7 +19,7 @@ from sop_runtime import node_executable
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
 
 SCHEMA_VERSION = 5
-LAYOUT_VERSION = "continuous-inline-v1"
+LAYOUT_VERSION = "continuous-inline-v2"
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -217,7 +217,7 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
     for header in spec["headers"]:
         header.append(None)
     spec["headers"][1][-1] = "row_key"
-    # Repeated labels keep identity explicit after inserting or removing a row.
+    # Keep the header/subtotal merges; detail identity gets its own safe blocks.
     spec["merges"] = [merge for merge in spec["merges"]
                       if not (re.fullmatch(r"([ABC])(\d+):\1(\d+)", merge)
                               and int(re.fullmatch(r"([ABC])(\d+):\1(\d+)", merge).group(2)) >= 5)]
@@ -232,6 +232,24 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
             row["values"] = {month: plans.get((product["id"], month), {}).get("sop") for month in months}
         else:
             row["values"] = {}
+    detail_rows = spec["rows"]
+    for start, first in enumerate(detail_rows):
+        if first["kind"] != "product" or (start and detail_rows[start - 1]["kind"] == "product"
+                and detail_rows[start - 1]["brand"] == first["brand"]
+                and detail_rows[start - 1]["model"] == first["model"]):
+            continue
+        end = start + 1
+        while (end < len(detail_rows) and detail_rows[end]["kind"] == "product"
+               and detail_rows[end]["brand"] == first["brand"]
+               and detail_rows[end]["model"] == first["model"]
+               and detail_rows[end]["row"] == detail_rows[end - 1]["row"] + 1):
+            detail_rows[end]["label_a"] = None
+            detail_rows[end]["label_b"] = None
+            end += 1
+        if end - start > 1:
+            spec["merges"].extend(f"{letter}{first['row']}:{letter}{detail_rows[end - 1]['row']}"
+                                  for letter in ("A", "B"))
+    for row in spec["rows"]:
         row["labels"] = [row.get("label_" + name) for name in "abc"]
     spec["products"] = products
     spec["editable_months_by_product"] = {p["id"]: [c["month"] for c in layout["cells"]
@@ -513,7 +531,8 @@ class WorkbookSync:
 
     def _parse_inline(self, workbook, metadata, expected):
         from sop_table import parse_inline_sheet
-        if metadata.get("layout_version") != LAYOUT_VERSION or expected.get("layout_version") != LAYOUT_VERSION:
+        if (metadata.get("layout_version") != expected.get("layout_version")
+                or expected.get("layout_version") not in {LAYOUT_VERSION, "continuous-inline-v1"}):
             raise ValidationError("主表布局标识已被改动，请恢复原表后重试。")
         if "_layout" not in workbook.sheetnames or workbook["_layout"].sheet_state == "visible":
             raise ValidationError("计划表缺少隐藏的版本月份映射。")

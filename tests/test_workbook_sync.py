@@ -34,6 +34,7 @@ def fixture_writer(payload):
     meta = [["key", "value"], ["token", payload["token"]], ["generated_at", payload["generated_at"]], ["schema_version", 1]]
     sheets = [("SOP计划", rows), ("_sync", baselines), ("_meta", meta)]
     formulas = {}
+    merged_ranges = {}
     if payload.get("schema_version") in (2, 3, 4, 5):
         sheets = []
         for spec in payload["layout"]["sheets"]:
@@ -69,6 +70,7 @@ def fixture_writer(payload):
                         for month in spec["shown_months"]:
                             row[int(month[-2:])+2] = plans.get((item["product_id"],month))
             formulas[spec["name"]] = spec["formulas"]
+            merged_ranges[spec["name"]] = spec["merges"]
             sheets.append((spec["name"],grid))
         meta[3][1] = payload["schema_version"]
         meta.append(["layout_version",payload["layout_version"]])
@@ -106,6 +108,11 @@ def fixture_writer(payload):
                         ET.SubElement(ET.SubElement(cell, f"{{{NS}}}is"), f"{{{NS}}}t").text = value
                     elif value is not None:
                         ET.SubElement(cell, f"{{{NS}}}v").text = str(value)
+            merges = merged_ranges.get(name, ())
+            if merges:
+                merged = ET.SubElement(root, f"{{{NS}}}mergeCells", {"count": str(len(merges))})
+                for reference in merges:
+                    ET.SubElement(merged, f"{{{NS}}}mergeCell", {"ref": reference})
             archive.writestr(f"xl/worksheets/sheet{index}.xml", ET.tostring(root, encoding="utf-8"))
 
 

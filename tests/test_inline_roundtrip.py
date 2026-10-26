@@ -14,7 +14,7 @@ from sop_roundtrip import PlanRoundtrip
 from sop_export import PlanExport
 from sop_store import SOPStore, TZ, ValidationError
 from tests.test_roundtrip import download_fixture, export_body
-from tests.test_workbook_sync import NS, col_name
+from tests.test_workbook_sync import NS, col_name, edit_cell
 
 
 def rewrite_grid(path, grid, sheet=1):
@@ -232,6 +232,33 @@ class InlineRoundtripTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "重新导出"):
             self.apply()
         self.assertEqual(len(self.store.list_products()["items"]), 3)
+
+    @unittest.skipUnless((Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe").is_file(), "Bundled spreadsheet runtime unavailable")
+    def test_real_renderer_merged_labels_import_plan_edit(self):
+        body = export_body()
+        for row, pid in zip(body["rows"], body["row_product_ids"]):
+            if pid:
+                row[3] = "V1" if pid == "a" else "V2"
+        clean, context = self.service.prepare(body)
+        with PlanExport().generate(clean, roundtrip=context) as result:
+            self.service.register(result.path, context)
+            shutil.copy2(result.path, self.path)
+        with zipfile.ZipFile(self.path) as archive:
+            root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        merges = {area.attrib["ref"] for area in root.findall(f".//{{{NS}}}mergeCell")}
+        book = openpyxl.load_workbook(self.path, read_only=True, data_only=False)
+        rows = list(book["SOP计划"].iter_rows(values_only=True))
+        first = next(index for index, row in enumerate(rows, 1) if "plan:a" in row)
+        second = next(index for index, row in enumerate(rows, 1) if "plan:b" in row)
+        self.assertIn(f"A{first}:A{second}", merges)
+        self.assertIn(f"B{first}:B{second}", merges)
+        self.assertIsNone(rows[second - 1][0])
+        self.assertIsNone(rows[second - 1][1])
+        book.close()
+        edit_cell(self.path, f"D{second}", 37)
+        result = self.service.import_content(self.path.read_bytes())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.quantity("b", "2026-10"), 37)
 
     @unittest.skipUnless((Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe").is_file(), "Bundled spreadsheet runtime unavailable")
     def test_real_renderer_register_and_structural_roundtrip(self):

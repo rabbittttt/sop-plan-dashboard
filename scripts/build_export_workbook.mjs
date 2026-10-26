@@ -123,8 +123,16 @@ function makeLayout(data, parsed) {
         for(const list of details)for(const source of list) {
           const row=sourceRow(source,'product');
           row.labels[2]=source.version+(source.metric==='锁单数'?'（锁单数）':'');
-          if(inline){row.labels[0]=source.brand;row.labels[1]=source.model;}
           row.version=row.labels[2];detailRows.get(source.metric).push(row);
+        }
+        if(inline)for(const field of fields) {
+          const group=detailRows.get(field);
+          if(!group.length)continue;
+          group[0].labels[0]=brand;
+          group[0].labels[1]=model;
+          // Keep lock and SOP blocks separate so the SOP anchor remains editable.
+          if(group.length>1)for(const letter of ['A','B'])
+            merges.push(letter+group[0].row+':'+letter+group.at(-1).row);
         }
       }
       if(next>first&&!inline) {
@@ -254,7 +262,7 @@ async function main() {
   if(data.roundtrip) {
     const metadata=wb.worksheets.add('_sop_import');exactText[metadata.name]=[];
     if(layout.inline) {
-      const manifest={columns:layout.columns,products:data.roundtrip.products,
+      const manifest={columns:layout.columns,merges:layout.merges,products:data.roundtrip.products,
         rows:layout.rows.map(row=>({row:row.row,key:row.key,kind:row.kind,product_id:row.productId??null,metric:row.metric,labels:row.labels,hidden:row.hidden,
           values:Object.fromEntries(layout.columns.filter(c=>c.kind==='month').map(c=>[c.month,row.values[c.column]??null]))})),
         product_column:layout.productColumn,kind_column:layout.kindColumn,key_column:layout.keyColumn,last_column:layout.lastColumn,
