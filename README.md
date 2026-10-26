@@ -5,7 +5,7 @@
 ## 启动
 
 1. 安装 Python 3.10+，运行 `python -m pip install -r requirements.txt`。
-2. 在 `input_file/` 放入原始销量文件；同目录的 `SOP计划维护.xlsx` 用于手工维护计划。已有业务数据迁移时，同时复制 `data/` 和 `input_file/`。
+2. 在 `input_file/` 放入原始销量文件；同目录的 `SOP计划维护.xlsx` 用于手工维护计划。没有这份维护表时，网页仍可从统一数据导出计划。已有业务数据迁移时，同时复制 `data/` 和 `input_file/`。
 3. 双击 `启动看板.cmd`，或运行 `./start-sop.ps1`。默认地址为 <http://127.0.0.1:8876/>。
 4. 运行 `./停止看板.ps1` 停止本项目服务。
 

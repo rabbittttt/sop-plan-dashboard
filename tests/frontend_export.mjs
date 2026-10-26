@@ -215,6 +215,8 @@ assert.equal(futureRow['2026-01'], null);
 assert.match(futureRow['数据说明'], /未适用|不适用/);
 
 // XLSX downloads post the raw export payload, await the server, and clean up browser resources.
+// The maintenance workbook is optional for export; a missing file must not disable this path.
+run("state.workbook_sync={status:'error',message:'维护表已被删除或移动',path:'input_file/SOP计划维护.xlsx'}");
 const requests = [], downloadEvents = [], objectURLs = [], revokedURLs = [], timers = [], messages = [];
 const workbookBlob = new Blob(['fixture-xlsx'], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
 context.fetch = async (url, options) => {

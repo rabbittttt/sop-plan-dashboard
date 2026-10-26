@@ -217,6 +217,11 @@ class PlanRoundtrip:
         if self.workbook_sync is None:
             return
         result = self.workbook_sync.sync()
+        # A missing primary workbook has no saved edits to read. Its automatic
+        # rebuild may fail or a user may have removed it after the last sync;
+        # downloaded exports and their later imports can still use the database.
+        if not self.workbook_sync.path.exists():
+            return
         if result.get("status") == "conflict":
             error = ConflictError(result.get("conflicts", []))
             error.source = "maintenance"

@@ -273,6 +273,34 @@ class RoundtripTest(unittest.TestCase):
         self.assertEqual(self.import_file()["status"], "conflict")
         self.assertEqual(self.value(), 19)
 
+    def test_missing_primary_workbook_after_sync_does_not_block_export_or_reimport(self):
+        sync = WorkbookSync(self.store, self.root / "primary.xlsx", writer=fixture_writer)
+        self.service = PlanRoundtrip(self.store, sync)
+        self.save("a", "2026-10", 10)
+        self.assertEqual(sync.sync()["status"], "synced")
+        sync.path.unlink()
+
+        clean, _ = self.export()
+        self.assertEqual(next(row[5] for row in clean["rows"] if row[0] == "车型汇总" and row[4] == "SOP计划量"), 10)
+        self.assertFalse(sync.path.exists())
+        self.change("a", "2026-10", 15)
+        result = self.import_file()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.value(), 15)
+
+    def test_missing_primary_workbook_at_start_allows_download_if_rebuild_fails(self):
+        sync = WorkbookSync(self.store, self.root / "primary.xlsx", writer=fixture_writer)
+        self.service = PlanRoundtrip(self.store, sync)
+        self.save("a", "2026-10", 10)
+        with patch.object(sync, "writer", side_effect=RuntimeError("primary writer unavailable")):
+            clean, _ = self.export()
+            self.assertEqual(next(row[5] for row in clean["rows"] if row[0] == "车型汇总" and row[4] == "SOP计划量"), 10)
+            self.assertFalse(sync.path.exists())
+            self.change("a", "2026-10", 15)
+            result = self.import_file()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.value(), 15)
+
     def test_pending_primary_writeback_reports_committed_success(self):
         sync = WorkbookSync(self.store, self.root / "primary.xlsx", writer=fixture_writer)
         self.service = PlanRoundtrip(self.store, sync)
