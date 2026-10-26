@@ -316,8 +316,8 @@ def _extract_generation_reference(source_dir=None, *, as_of=None):
 VERSION_METRICS = [
     {"id": "net_orders", "label": "净大定（版本参考）", "unit": "单",
      "source_file": "鸿蒙智行大定选配比例分析.xlsx", "control_label": "净大定"},
-    {"id": "delivery_reference", "label": "已交付（版本参考，待核对）", "unit": "单",
-     "source_file": "鸿蒙智行锁单选配比例分析.xlsx", "control_label": "已交付"},
+    {"id": "delivery_reference", "label": "锁单来源版本数量", "unit": "单",
+     "source_file": "鸿蒙智行锁单选配比例分析.xlsx", "control_label": "交车锁单"},
 ]
 
 
@@ -445,7 +445,7 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
         {"level": "warning", "code": "stale_version_data", "message": f"版本月表最新为 {latest_month}，当前为 {observation:%Y-%m}；后续月份缺失，不能作实时完成量。"},
         {"level": "warning", "code": "unknown_month_cutoff", "message": "版本月表未注明精确截止日，且与日表不能直接对齐；所有月值均作为来源参考，完整月状态未确认。"},
         {"level": "warning", "code": "version_control_difference", "message": f"{len(discrepancies)} 项车型月版本合计与同页小计存在差异，保留原数，不假定差异原因。", "count": len(discrepancies), "examples": discrepancies[:5]},
-        {"level": "warning", "code": "delivery_metric_unconfirmed", "message": "锁单选配表的版本数量接近同页“已交付”小计，而非“交车锁单”；作为已交付版本参考待核对，不作为正式发货量 Y。"},
+        {"level": "info", "code": "version_lock_source_rows", "message": "锁单选配表的版本数量取“版本/数量”明细，车型锁单取“交车锁单/数量”总行；两者原值独立保留。"},
         {"level": "warning", "code": "brand_control_conflicts", "message": f"源表有 {len(option_conflicts)} 项品牌小计与车型合计不同；看板只汇总真实版本行，不叠加品牌或车型总计。", "count": len(option_conflicts), "examples": option_conflicts[:3]},
     ]
     if missing:
@@ -460,7 +460,7 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
                  "notes": [
                      "真实版本：仅从车型by月表中“版本/数量”块提取，不把年款或二级代际冒充配置版本。",
                      "不同年款独立；品牌、车型、版本逐级汇总，但不叠加原品牌总计、车型总计及其他选配维度。",
-                     "大定选配表版本数量按净大定参考展示；锁单选配表版本数量接近已交付，仅作待核对参考。",
+                     "大定选配表版本数量按净大定参考；锁单选配表版本数量与交车锁单总行分别读取，不要求合计相等。",
                      "月表最后一列“总计”部分行实际等于最后一个月，未作为跨月总计使用。",
                      "所有原始数量保持不变。版本合计与小计的±1差异不擅自修正或归因为四舍五入。",
                      "汇总文件代际日量保存在单独 reference 区域，未拆分为配置销量，未计入版本合计。",
@@ -531,7 +531,7 @@ def _model_monthly_locks(source_dir, *, as_of=None):
 
 
 def _build_lock_data(version_data, model_sales, basis):
-    """Change the primary metric without relabelling ambiguous source quantities."""
+    """Keep version detail and model lock totals at their separate source grains."""
     if basis not in LOCK_BASIS_OPTIONS:
         raise ValueError("无效的版本锁单口径")
     confirmed = basis == "source_version_quantity"
@@ -592,14 +592,14 @@ def _build_lock_data(version_data, model_sales, basis):
                  }}})
     meta["quality"] = [q for q in meta["quality"] if q["code"] in ("stale_version_data", "unknown_month_cutoff")]
     if not model_only:
-        meta["quality"].append({"level": "warning", "code": "version_lock_control_difference",
-                                "message": f"{len(differences)} 项版本数量合计与同页交车锁单总量不一致；保留两者原始口径，不分摊、不改数。",
+        meta["quality"].append({"level": "info" if confirmed else "warning", "code": "version_lock_control_difference",
+                                "message": f"{len(differences)} 项车型月的版本数量合计与交车锁单总量不同；两个层级各取来源原值，不分摊、不强制相等。",
                                 "count": len(differences), "examples": differences[:5]})
     if model_only:
         basis_note = "已按确认仅采用交车锁单数量行，版本计划汇总后与同月车型锁单对照。"
         meta["quality"].append({"level": "info", "code": "lock_basis_model_row", "message": basis_note})
     elif confirmed:
-        basis_note = "已按用户确认：锁单选配表“版本/数量”原数作为版本锁单，与同页交车锁单小计的差异仍单列保留。"
+        basis_note = "版本锁单取锁单选配表“版本/数量”明细，车型锁单独立取“交车锁单/数量”总行；两者原值分别展示，不要求合计相等。"
         meta["quality"].append({"level": "info", "code": "version_lock_basis_user_confirmed", "message": basis_note})
     else:
         basis_note = "版本数量与同页“已交付”小计接近、与交车锁单不一致；确认前版本锁单留空，车型交车锁单单独展示，不能当作版本实绩。"
@@ -608,9 +608,11 @@ def _build_lock_data(version_data, model_sales, basis):
     meta["notes"] = [
         "默认指标为锁单，月份和具体配置版本使用与 SOP 相同的产品键；原版本ID保持稳定。",
         basis_note,
+        "车型月锁单来自“交车锁单/数量”行，版本月锁单来自“版本/数量”明细行；品牌和总计只累加车型数，不与版本数叠加。" if confirmed else
         "车型月锁单来自同页“交车锁单/数量”行，只在车型完整选中时独立显示，不与配置版本数叠加。",
         "只取月份列；源表“总计”列不参与跨月相加。缺失保持空白，明确的0保留为0。",
         "原始版本数量已排除在锁单口径之外；版本锁单无数据，不按占比或其他指标分摊。" if model_only else
+        "版本数量按来源原值展示，不按车型总量分摊；净大定与代际日量另作参考。" if confirmed else
         "净大定和原锁单选配版本数仅在 version_reference 中留存，代际日量仅在 reference 中留存。",
         "月表未提供精确截止日，不用日表日期或文件修改时间冒充月表截止日。",
     ]
@@ -619,6 +621,7 @@ def _build_lock_data(version_data, model_sales, basis):
         if source.get("metric") == "delivery_reference":
             source.update({"metric": "locked_orders", "version_lock_basis": basis,
                            "description": "按确认仅读取交车锁单/数量行，版本原数量不用于锁单；版本计划汇总后与车型锁单对照。" if model_only else
+                           "版本锁单读取版本/数量明细行，车型锁单独立读取交车锁单/数量总行；差异保留，不分摊。" if confirmed else
                            "车型锁单读取交车锁单/数量行；配置数量仅在用户确认口径后作为版本锁单，未进行分摊。"})
             if model_only:
                 cells = [r["source_cell"] for r in model_sales if r["source_id"] == source["id"]]
@@ -628,7 +631,8 @@ def _build_lock_data(version_data, model_sales, basis):
     return {"meta": meta, "products": version_data["products"], "sales": locks,
             "model_sales": model_sales, "sources": sources,
             "reference": version_data.get("reference"),
-            "version_reference": {"description": "原始版本数量口径参考，不参与锁单与SOP主表相加。",
+            "version_reference": {"description": "版本/数量原值已作为版本锁单；此处另保留来源参考，不与车型锁单相加。" if confirmed else
+                                              "原始版本数量口径参考，不参与锁单与SOP主表相加。",
                                   "metrics": version_data["meta"]["metrics"], "sales": version_data["sales"],
                                   "reconciliation": version_data["meta"]["reconciliation"]}}
 

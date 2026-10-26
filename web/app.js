@@ -66,21 +66,21 @@ function historyMonths() { if(historyRange==='all') return [...new Set(state.sal
 function productGenerations(p) { return p.source_generations?.length?p.source_generations:p.generation?[p.generation]:[]; }
 function sumSales(ps,month, data=salesIndex,allowModelTotals=ps.length>1) {
   let value=0,modelReference=false,referenceConflict=false;
-  const groups=new Map(),covered=new Set(),known=new Set(),references=[];
+  const groups=new Map(),modelScoped=new Set(),known=new Set(),references=[];
   ps.forEach(p=>productGenerations(p).forEach(g=>{if(!groups.has(g))groups.set(g,[]);groups.get(g).push(p);}));
   for(const [generation,group] of groups){
-    const values=group.map(p=>data.get(`${key(p.id,month)}|${metric}`)).filter(v=>v!=null);
     const all=state.products.filter(p=>productGenerations(p).includes(generation));
-    const ref=allowModelTotals&&metric==='locked_orders'&&values.length<group.length&&group.length===all.length
-      ?(state.model_sales||[]).find(r=>r.generation===generation&&r.month===month&&r.metric==='locked_orders'):null;
+    const complete=allowModelTotals&&metric==='locked_orders'&&group.length===all.length;
+    if(complete)group.forEach(p=>modelScoped.add(p.id));
+    const ref=complete?(state.model_sales||[]).find(r=>r.generation===generation&&r.month===month&&r.metric==='locked_orders'):null;
     if(ref?.value!=null)references.push({group,ref});
   }
   for(const entry of references){
     const overlaps=references.some(other=>other!==entry&&entry.group.some(p=>other.group.some(q=>q.id===p.id)));
     if(overlaps){referenceConflict=true;continue;}
-    value+=entry.ref.value;entry.group.forEach(p=>{covered.add(p.id);known.add(p.id);});modelReference=true;
+    value+=entry.ref.value;entry.group.forEach(p=>known.add(p.id));modelReference=true;
   }
-  ps.filter(p=>!covered.has(p.id)).forEach(p=>{const v=data.get(`${key(p.id,month)}|${metric}`);if(v!=null){value+=v;known.add(p.id);}});
+  ps.filter(p=>!modelScoped.has(p.id)).forEach(p=>{const v=data.get(`${key(p.id,month)}|${metric}`);if(v!=null){value+=v;known.add(p.id);}});
   return {value:known.size?value:null,known:known.size,total:ps.length,...(modelReference?{model_reference:true}:{}),...(referenceConflict?{reference_conflict:true}:{})};
 }
 function sumPlan(ps,month,field,data=planIndex) {
@@ -90,7 +90,7 @@ function sumPlan(ps,month,field,data=planIndex) {
 }
 function quantity(q, pending='待维护') {
   if(q.value==null)return q.reference_conflict?'<span class="missing" title="关联的新旧来源在同月都有车型锁单，请核对来源">来源冲突</span>':`<span class="missing">${pending}</span>`;
-  const note=[q.model_reference?'源表交车锁单数量行，仅提供车型汇总':'',q.reference_conflict?'同一版本的新旧来源同月冲突，冲突部分未汇总':'',q.known<q.total?'仅已维护项合计，仍有缺项':''].filter(Boolean).join('；');
+  const note=[q.model_reference?'源表交车锁单数量行，车型原值':'',q.reference_conflict?'同一版本的新旧来源同月冲突，冲突部分未汇总':'',q.known<q.total?'仅已知项合计，仍有缺项':''].filter(Boolean).join('；');
   return note?`<span title="${note}" aria-label="${fmt(q.value)}，${note}">${fmt(q.value)}</span>`:fmt(q.value);
 }
 function opt(value,label,current) { return `<option value="${esc(value)}" ${value===current?'selected':''}>${esc(label)}</option>`; }
@@ -139,7 +139,7 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
     if(isLock) {
       const actual=sumSales(ps,m,salesIndex,!one);
       const modelOnly=one&&state.meta?.version_lock_basis==='model_lock_row'&&(state.model_sales||[]).some(r=>r.generation===p.generation&&r.month===m&&r.value!=null);
-      cell=`<td class="history-cell number${past}" title="${m>state.current_month?'尚未发生':modelOnly?'源表仅提供车型锁单数，未分配至版本':'当月来源锁单数'}">${quantity(actual,'—')}</td>`;
+      cell=`<td class="history-cell number${past}" title="${m>state.current_month?'尚未发生':modelOnly?'源表仅提供车型锁单数，未分配至版本':one?'源表“版本／数量”行，版本原值':actual.model_reference?'源表“交车锁单／数量”行，车型原值':'当月来源锁单数'}">${quantity(actual,'—')}</td>`;
     } else {
       const q=sumPlan(ps,m,'sop');
       const open=isPlanMonthOpen(m)&&(!one||canEditProduct(p,m));
@@ -172,7 +172,7 @@ function planning() {
   if(!editable.includes(target))target=editable.find(m=>m===state.current_month)||editable[0]||'';
   const period=rolling?`${shortMonth(visible[0])}—${shortMonth(visible.at(-1))}`:`${planYear}年1—12月`;
   const models=[...new Set(state.products.filter(p=>!brand||p.brand===brand).map(p=>p.model))];
-  const notes=state.meta?.quality||[],modelLockBasis=state.meta?.version_lock_basis==='model_lock_row';
+  const notes=state.meta?.quality||[],modelLockBasis=state.meta?.version_lock_basis==='model_lock_row',versionLockBasis=state.meta?.version_lock_basis==='source_version_quantity';
   let rows='';
   for(const b of [...new Set([...brands,...ps.map(p=>p.brand)])]) {
     const bp=ps.filter(p=>p.brand===b);if(!bp.length)continue;
@@ -188,7 +188,7 @@ function planning() {
     <div class="annual-heading"><h1>SOP计划${rolling?' · M+6':''}</h1><p>${period} · ${rolling?'前5个月＋当月＋未来6个月':'全年月度对照'}<span>单位：辆</span></p></div>
     <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button('批量维护','bulk-plan','small',editable.length?'':'disabled')}${button('显示锁单数','toggle-locks','small lock-toggle',`aria-label="显示锁单数" aria-pressed="${showLocks}"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
     <section class="card plan-card annual-sheet${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
-    <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${modelLockBasis&&showLocks?'锁单取源表“交车锁单”车型汇总，未分配至版本。':''}点击车型展开，点击版本SOP维护。</span></div>
+    <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?'车型锁单取“交车锁单”行，版本锁单取“版本／数量”行，分别保留原值。':''):''}点击车型展开，点击版本SOP维护。</span></div>
     ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;
 }
 function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';$('#edit-dialog').showModal(); }
@@ -285,8 +285,8 @@ async function showDetail(id) {
   const p=state.products.find(p=>p.id===id); selected=id;
   const history=await api(`/api/history?product_id=${encodeURIComponent(id)}&month=${target}`); history.items=history.items.filter(h=>h.entity==='plan');
   const relevant=state.products.filter(x=>x.brand===p.brand&&x.model===p.model),lm=shift(state.current_month,-1);
-  const salesTotal=sumSales(relevant,lm),planTotal=sumPlan(relevant,target,'sop');
-  openDialog(`<div class="eyebrow">VERSION DETAIL</div><h2>${esc(p.model)} · ${esc(p.version)}</h2><p class="subtitle">${esc(p.brand)} · 关注月份 ${shortMonth(target)}</p><h3>版本结构对照</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>版本</th><th>${lm}订单占比</th><th>${target}计划占比</th></tr></thead><tbody>${relevant.map(v=>{const a=sumSales([v],lm).value,b=sumPlan([v],target,'sop').value;return `<tr><td>${esc(v.version)}</td><td>${a!=null&&salesTotal.value>0&&salesTotal.known===salesTotal.total?pct(a/salesTotal.value*100):'—'}</td><td>${b!=null&&planTotal.value>0&&planTotal.known===planTotal.total?pct(b/planTotal.value*100):'待维护齐全'}</td></tr>`}).join('')}</tbody></table></div><h3>同月修订记录</h3>${history.items.length?`<div class="activity">${history.items.map(h=>`<article><strong>${esc(h.owner||h.after?.owner||'维护人')}</strong><span>${dateText(h.recorded_at||h.updated_at||h.created_at||h.at)}</span><p>${esc(h.reason||h.after?.reason||'计划更新')} · ${esc(h.notes||h.after?.notes||'')}</p><p class="muted">预测 ${fmt(h.forecast_before??h.before?.forecast)} → ${fmt(h.forecast_after??h.after?.forecast??h.forecast)} ｜ SOP ${fmt(h.sop_before??h.before?.sop)} → ${fmt(h.sop_after??h.after?.sop??h.sop)}</p></article>`).join('')}</div>`:'<div class="empty-state compact">这个版本的目标月份尚无修订记录。</div>'}<div class="dialog-actions">${button('关闭','close-dialog')}${button('维护此版本','detail-edit','primary',`data-product="${id}"`)}</div>`);
+  const versionSalesTotal=sumSales(relevant,lm,salesIndex,false),planTotal=sumPlan(relevant,target,'sop');
+  openDialog(`<div class="eyebrow">VERSION DETAIL</div><h2>${esc(p.model)} · ${esc(p.version)}</h2><p class="subtitle">${esc(p.brand)} · 关注月份 ${shortMonth(target)}</p><h3>版本结构对照</h3><p class="form-help">版本锁单占比按版本行合计计算；车型锁单另取“交车锁单”行，两者可能不同。</p><div class="table-scroll"><table class="detail-table"><thead><tr><th>版本</th><th>${lm}版本锁单占比</th><th>${target}计划占比</th></tr></thead><tbody>${relevant.map(v=>{const a=sumSales([v],lm).value,b=sumPlan([v],target,'sop').value;return `<tr><td>${esc(v.version)}</td><td>${a!=null&&versionSalesTotal.value>0&&versionSalesTotal.known===versionSalesTotal.total?pct(a/versionSalesTotal.value*100):'—'}</td><td>${b!=null&&planTotal.value>0&&planTotal.known===planTotal.total?pct(b/planTotal.value*100):'待维护齐全'}</td></tr>`}).join('')}</tbody></table></div><h3>同月修订记录</h3>${history.items.length?`<div class="activity">${history.items.map(h=>`<article><strong>${esc(h.owner||h.after?.owner||'维护人')}</strong><span>${dateText(h.recorded_at||h.updated_at||h.created_at||h.at)}</span><p>${esc(h.reason||h.after?.reason||'计划更新')} · ${esc(h.notes||h.after?.notes||'')}</p><p class="muted">预测 ${fmt(h.forecast_before??h.before?.forecast)} → ${fmt(h.forecast_after??h.after?.forecast??h.forecast)} ｜ SOP ${fmt(h.sop_before??h.before?.sop)} → ${fmt(h.sop_after??h.after?.sop??h.sop)}</p></article>`).join('')}</div>`:'<div class="empty-state compact">这个版本的目标月份尚无修订记录。</div>'}<div class="dialog-actions">${button('关闭','close-dialog')}${button('维护此版本','detail-edit','primary',`data-product="${id}"`)}</div>`);
 }
 function exportCSV(name,header,rows) {
   const quote=v=>{let s=String(v??''); if(/^[=+@\-]/.test(s)&&!/^\-?\d+(\.\d+)?$/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
@@ -315,7 +315,8 @@ function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths
       if(!detail&&includeVersions)notes.push('车型汇总与版本明细范围相同，请勿重复相加');
       if(field==='locks') {
         notes.push('锁单为来源月值，完整性以源表为准');
-        if(quantities.some(q=>q.model_reference))notes.push('含源表“交车锁单”车型汇总，未分摊到版本');
+        if(quantities.some(q=>q.model_reference))notes.push('车型锁单取源表“交车锁单／数量”原值，不按版本重算');
+        if(detail&&state.meta?.version_lock_basis==='source_version_quantity')notes.push('版本锁单取源表“版本／数量”原值，与车型锁单分别记录');
         if(detail&&state.meta?.version_lock_basis==='model_lock_row')notes.push('源表仅有车型锁单时，版本锁单留空');
       }
       const describe=(test,label)=>{const ms=chosen.filter((m,i)=>test(quantities[i]));if(ms.length)notes.push(`${ms.join('、')}：${label}`);};

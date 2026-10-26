@@ -70,6 +70,39 @@ class SalesMetricSafetyTests(unittest.TestCase):
         self.assertEqual([row["source_cell"] for row in rows], ["D2", "E2"])
         self.assertTrue(all(row["metric"] == "locked_orders" and not row["is_allocated"] for row in rows))
 
+    def test_version_reconciliation_uses_lock_total_not_delivery(self):
+        class Sheet:
+            title = "问界 M5 2025款by月"
+
+            def iter_rows(self, **kwargs):
+                return iter([
+                    ("指标", "统计类型", "分类", "26-03"),
+                    ("交车锁单", "数量", "数量", 23),
+                    ("已交付", "数量", "数量", 17),
+                    ("净大定", "数量", "数量", 49),
+                    ("版本", "数量", "后驱 Max", 0),
+                    (None, None, "四驱 Ultra", 17),
+                ])
+
+        class Book:
+            worksheets = [Sheet()]
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for metric in sop_data.VERSION_METRICS:
+                (root / metric["source_file"]).touch()
+            with patch.object(sop_data.openpyxl, "load_workbook", return_value=Book()), \
+                 patch.object(sop_data, "_option_consistency", return_value=[]):
+                result = sop_data._extract_version_reference(root, as_of="2026-10-26")
+        check = next(row for row in result["meta"]["reconciliation"]
+                     if row["metric"] == "delivery_reference")
+        self.assertEqual((check["version_sum"], check["source_total"], check["difference"]), (17, 23, -6))
+        self.assertEqual((check["control_label"], check["source_cell"]), ("交车锁单", "D2"))
+        self.assertEqual(sorted(row["value"] for row in result["sales"] if row["metric"] == "delivery_reference"), [0, 17])
+
     def test_model_lock_confirmation_persists_across_ordinary_refreshes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -101,8 +134,16 @@ class SalesMetricSafetyTests(unittest.TestCase):
         before = copy.deepcopy(source)
         result = sop_data._build_lock_data(source, models, "source_version_quantity")
         self.assertEqual([r["value"] for r in result["sales"]], [0, 17])
+        self.assertEqual([r["source_cell"] for r in result["sales"]], ["D19", "D20"])
         self.assertEqual(result["meta"]["metric_coverage"]["locked_orders"]["monthly_total"], 17)
         self.assertEqual(result["model_sales"][0]["value"], 23)
+        self.assertEqual(result["model_sales"][0]["source_cell"], "D2")
+        discrepancy = next(q for q in result["meta"]["quality"] if q["code"] == "version_lock_control_difference")
+        self.assertEqual(discrepancy["level"], "info")
+        self.assertEqual(discrepancy["count"], 1)
+        self.assertIn("不强制相等", discrepancy["message"])
+        self.assertIn("版本/数量", result["sources"][0]["description"])
+        self.assertIn("已作为版本锁单", result["version_reference"]["description"])
         self.assertEqual(source, before)
         self.assertEqual([p["id"] for p in result["products"]], ["stable-max", "stable-ultra"])
 

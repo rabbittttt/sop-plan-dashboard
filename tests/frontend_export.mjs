@@ -24,7 +24,7 @@ assert.equal(vm.runInContext('showLocks', createContext('true')), true);
 run(`
   state = {
     current_month:'2026-10',plan_end:'2027-12',months:['2026-10','2027-12'],
-    history_months:['2026-07','2026-08','2026-09'],meta:{version_lock_basis:'model_lock_row'},
+    history_months:['2026-07','2026-08','2026-09'],meta:{version_lock_basis:'source_version_quantity'},
     products:[
       {id:'a1',brand:'问界',model:'M5',version:'Max',generation:'a-m5',active:true,start_month:'2026-01'},
       {id:'a2',brand:'问界',model:'M5',version:'Ultra',generation:'a-m5',active:true,start_month:'2026-01'},
@@ -40,13 +40,20 @@ run(`
       {product_id:'b1',month:'2026-02',sop:0}
     ],
     sales:[
+      {product_id:'a1',month:'2026-01',metric:'locked_orders',value:80},
+      {product_id:'a2',month:'2026-01',metric:'locked_orders',value:70},
+      {product_id:'a1',month:'2026-02',metric:'locked_orders',value:100},
+      {product_id:'a2',month:'2026-02',metric:'locked_orders',value:110},
       {product_id:'a3',month:'2026-01',metric:'locked_orders',value:15},
       {product_id:'b1',month:'2026-01',metric:'locked_orders',value:0},
       {product_id:'b1',month:'2026-02',metric:'locked_orders',value:9}
     ],
     model_sales:[
       {generation:'a-m5',month:'2026-01',metric:'locked_orders',value:200},
-      {generation:'a-m5',month:'2026-02',metric:'locked_orders',value:250}
+      {generation:'a-m5',month:'2026-02',metric:'locked_orders',value:250},
+      {generation:'a-m7',month:'2026-01',metric:'locked_orders',value:15},
+      {generation:'b-m5',month:'2026-01',metric:'locked_orders',value:0},
+      {generation:'b-m5',month:'2026-02',metric:'locked_orders',value:9}
     ]
   };
   metric='locked_orders';brand='';model='';query='';range='rolling';indexData();
@@ -81,7 +88,8 @@ const oneRow = (result, criteria) => {
 const aModel = metric => oneRow(detailed, {level:'车型汇总',brand:'问界',model:'M5',metric});
 assert.equal(aModel('锁单数')['2026-01'], 200);
 assert.equal(aModel('锁单数')['2026-02'], 250);
-assert.match(aModel('锁单数')['数据说明'], /车型|源表|来源/);
+assert.match(aModel('锁单数')['数据说明'], /交车锁单.*原值.*不按版本重算/);
+assert.equal(get("sumSales(state.products,'2026-01').value"), 215, 'Brand totals use the model lock row even when version quantities sum differently.');
 assert.equal(aModel('SOP计划量')['2026-01'], 0, 'A known zero remains numeric even when another version is missing.');
 assert.equal(aModel('SOP计划量')['2026-02'], 50);
 assert.match(aModel('SOP计划量')['数据说明'], /缺项|仅已知|部分|未填|未维护/);
@@ -95,11 +103,12 @@ const bLocks = oneRow(detailed, {level:'车型汇总',brand:'智界',model:'M5',
 assert.equal(bLocks['2026-01'], 0);
 assert.equal(bLocks['2026-02'], 9);
 
-// Source model locks remain aggregate-only; version nulls are not allocated or changed to zero.
-for (const version of ['Max','Ultra']) {
+// Version quantities and the model lock row are independent source values.
+for (const [version,january,february] of [['Max',80,100],['Ultra',70,110]]) {
   const row = oneRow(detailed, {level:'版本明细',brand:'问界',model:'M5',version,metric:'锁单数'});
-  assert.equal(row['2026-01'], null);
-  assert.equal(row['2026-02'], null);
+  assert.equal(row['2026-01'], january);
+  assert.equal(row['2026-02'], february);
+  assert.match(row['数据说明'], /版本／数量.*原值/);
 }
 const absentPlan = oneRow(detailed, {level:'版本明细',brand:'问界',model:'M5',version:'Ultra',metric:'SOP计划量'});
 assert.equal(absentPlan['2026-01'], null);
@@ -119,6 +128,17 @@ assert.deepEqual(groupRows.map(row => [row[0],row[4]]), [
   ['版本明细','SOP计划量'],['版本明细','SOP计划量'],
 ]);
 assert.deepEqual(groupRows.filter(row => row[0] === '版本明细').map(row => row[3]), ['Max','Ultra','Max','Ultra']);
+
+// A version structure percentage uses the version rows as its denominator.
+let detailHtml='';
+context.captureDetail=html=>{detailHtml=html;};
+context.fetch=async()=>({ok:true,json:async()=>({items:[]})});
+run("openDialog=captureDetail;state.current_month='2026-03';target='2026-02'");
+await vm.runInContext("showDetail('a1')",context);
+assert.match(detailHtml,/版本锁单占比按版本行合计计算/);
+assert.match(detailHtml,/47\.6%/);
+assert.match(detailHtml,/52\.4%/);
+run("state.current_month='2026-10';target='';selected=null");
 
 // Each export choice is explicit and independent from the on-screen lock switch.
 run('showLocks=false');
@@ -145,11 +165,20 @@ const subset = get("buildPlanExport({includeLocks:true,includeVersions:false,sel
 assert.equal(subset.rows.length, 2);
 assert.deepEqual(subset.selectedProductIds, ['a1'], 'A filtered summary must not silently include the other model versions.');
 const subsetLocks = oneRow(subset, {level:'车型汇总',brand:'问界',model:'M5',metric:'锁单数'});
-assert.equal(subsetLocks['2026-01'], null, 'A selected subset must not inherit the whole model lock total.');
+assert.equal(subsetLocks['2026-01'], 80, 'A selected subset uses only its selected version, not the whole model lock total.');
+assert.equal(subsetLocks['2026-02'], 100);
 const subsetSOP = oneRow(subset, {level:'车型汇总',brand:'问界',model:'M5',metric:'SOP计划量'});
 assert.equal(subsetSOP['2026-02'], 20);
 assert.match(subsetSOP['数据说明'], /部分版本|筛选|已选|选择/);
 run("brand='';model='';query=''");
+
+// A missing model lock row stays missing even if every version row has a value.
+run("state.model_sales=state.model_sales.filter(r=>!(r.generation==='a-m5'&&r.month==='2026-02'))");
+const noModelRow=get("buildPlanExport({includeLocks:true,includeVersions:true,selectedMonths:['2026-02']})");
+assert.equal(oneRow(noModelRow,{level:'车型汇总',brand:'问界',model:'M5',metric:'锁单数'})['2026-02'],null);
+assert.equal(oneRow(noModelRow,{level:'版本明细',brand:'问界',model:'M5',version:'Max',metric:'锁单数'})['2026-02'],100);
+assert.equal(oneRow(noModelRow,{level:'版本明细',brand:'问界',model:'M5',version:'Ultra',metric:'锁单数'})['2026-02'],110);
+run("state.model_sales.push({generation:'a-m5',month:'2026-02',metric:'locked_orders',value:250})");
 
 for (const selectedMonths of [[], ['2026-1'], ['2026-13'], ['2028-01'], ['2026-01','2028-01']]) {
   context.invalidOptions = {includeLocks:true,includeVersions:true,selectedMonths};
@@ -254,7 +283,8 @@ run(`
   state.sales=[{product_id:'normal',month:'2026-01',metric:'locked_orders',value:17}];
   state.model_sales=[
     {generation:'old-m9',month:'2026-01',metric:'locked_orders',value:200},
-    {generation:'new-m9',month:'2026-01',metric:'locked_orders',value:200}
+    {generation:'new-m9',month:'2026-01',metric:'locked_orders',value:200},
+    {generation:'normal-m9',month:'2026-01',metric:'locked_orders',value:17}
   ];
   indexData();
 `);

@@ -39,6 +39,10 @@ vm.runInContext(`
   ];
   salesIndex = new Map([['a|2026-08|locked_orders',11],['b|2026-08|locked_orders',22],['c|2026-08|locked_orders',33]]);
 `, context);
+assert.equal(get("sumSales(state.products,'2026-08',salesIndex,true).value"),200,
+  'The full model keeps its 交车锁单 row even though 11+22+33 differs.');
+assert.equal(get("sumSales(state.products,'2026-08',salesIndex,false).value"),66,
+  'Version structure uses the version quantities without replacing the model lock value.');
 const detail = get("planVersionRows(state.products,['2026-08','2026-09'])");
 const detailRows = [...detail.matchAll(/<tr\b[^]*?<\/tr>/g)].map(m=>m[0]);
 assert.equal(detailRows.length, 6);

@@ -239,6 +239,8 @@ class InlineRoundtripTest(unittest.TestCase):
         for row, pid in zip(body["rows"], body["row_product_ids"]):
             if pid:
                 row[3] = "V1" if pid == "a" else "V2"
+                if row[4] == "锁单数":
+                    row[5] = 40 if pid == "a" else 60
         clean, context = self.service.prepare(body)
         with PlanExport().generate(clean, roundtrip=context) as result:
             self.service.register(result.path, context)
@@ -250,6 +252,10 @@ class InlineRoundtripTest(unittest.TestCase):
         rows = list(book["SOP计划"].iter_rows(values_only=True))
         first = next(index for index, row in enumerate(rows, 1) if "plan:a" in row)
         second = next(index for index, row in enumerate(rows, 1) if "plan:b" in row)
+        model_lock = next(row for row in rows if "model_total" in row and row[1] == "M 锁单 合计")
+        version_locks = [row for row in rows if any(isinstance(value, str) and value.startswith("lock:") for value in row)]
+        self.assertEqual(model_lock[3], 999)
+        self.assertEqual([row[3] for row in version_locks], [40, 60])
         self.assertIn(f"A{first}:A{second}", merges)
         self.assertIn(f"B{first}:B{second}", merges)
         self.assertIsNone(rows[second - 1][0])
