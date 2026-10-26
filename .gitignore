@@ -1,0 +1,15 @@
+# Business inputs, editable plans, snapshots, databases, exports and local settings.
+/input_file/
+/data/
+/output_file/
+
+# Generated test files and local development environments.
+/tests/artifacts/
+/.test_outputs/
+/.venv/
+/.idea/
+**/__pycache__/
+*.py[cod]
+/scripts/node_modules/
+node_modules/
+~$*.xlsx

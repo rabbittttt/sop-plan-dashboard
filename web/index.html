@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#123b72">
+    <meta name="description" content="SOP计划看板、M+6滚动预测、月度锁单对照与历史快照">
+    <title>SOP计划看板</title>
+    <link rel="icon" href="favicon.ico?v=2" type="image/x-icon">
+    <link rel="icon" href="sop-icon.svg?v=2" type="image/svg+xml" sizes="any">
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#app">跳转至主要内容</a>
+    <div class="workspace">
+      <header class="app-header">
+        <div class="app-brand"><img class="app-icon" src="sop-icon.svg?v=2" width="30" height="30" alt="" aria-hidden="true"><strong>SOP计划看板</strong></div>
+        <nav class="top-nav" aria-label="主要导航">
+          <button class="nav-item active" type="button" data-page="planning" aria-current="page">SOP计划</button>
+          <button class="nav-item" type="button" data-page="history">历史快照</button>
+          <button class="nav-item" type="button" data-page="matching">计划匹配率</button>
+          <button class="nav-item" type="button" data-page="data">数据与规则</button>
+        </nav>
+        <div class="header-actions">
+          <strong id="page-title" class="visually-hidden">SOP计划</strong>
+          <button class="button ghost small" id="refresh-btn" type="button">刷新数据</button>
+          <button class="button ghost small" id="owner-btn" type="button" aria-label="设置操作人">设置维护人</button>
+        </div>
+      </header>
+      <main id="app" tabindex="-1" aria-label="SOP计划内容">
+        <div class="loading-state" role="status"><span class="loading-spinner" aria-hidden="true"></span><strong>正在读取计划数据</strong></div>
+      </main>
+      <footer class="workspace-footer"><span>SOP计划看板</span><time id="current-time" class="current-time"></time></footer>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <dialog id="edit-dialog" aria-labelledby="dialog-title">
+      <button type="button" class="dialog-close" data-close aria-label="关闭对话框"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+      <div id="dialog-content"></div>
+    </dialog>
+  </body>
+</html>

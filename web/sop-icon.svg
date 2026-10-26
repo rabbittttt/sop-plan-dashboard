@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="icon-title icon-description">
+  <title id="icon-title">SOP滚动计划</title>
+  <desc id="icon-description">环形箭头围绕实际与计划数据柱，表示持续滚动的月度预测。</desc>
+  <rect width="64" height="64" rx="16" fill="#123B72"/>
+  <path d="M52 34a20 20 0 1 1-7-17" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round"/>
+  <path d="M45 9v11H34" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="22" y="32" width="8" height="12" rx="2" fill="#FFFFFF"/>
+  <rect x="34" y="26" width="8" height="18" rx="2" fill="#41D9DC"/>
+</svg>

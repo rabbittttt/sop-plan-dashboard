@@ -1,0 +1,2 @@
+# Python 3.10+; the web service uses the standard library.
+openpyxl>=3.1,<4
