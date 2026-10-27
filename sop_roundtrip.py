@@ -2,7 +2,7 @@
 
 Export baselines are immutable. An unchanged old copy never undoes a newer web
 edit, and a changed cell is merged only against its own original export value.
-openpyxl is used for reading only; the shared artifact renderer authors XLSX.
+Downloads may be authored by the bundled Node renderer or the offline Python writer.
 """
 from __future__ import annotations
 

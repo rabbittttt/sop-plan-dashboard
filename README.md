@@ -11,7 +11,7 @@
 
 启动脚本优先使用 `SOP_PYTHON_PATH` 指定的 Python，其次使用本机 Codex 运行环境，最后使用 PATH 中的 Python。Excel 生成脚本优先使用 `SOP_NODE_PATH` 指定的 Node，其次使用本机 Codex 运行环境，最后使用 PATH 中的 Node。
 
-**Excel 运行依赖：** 维护表、导出和备份生成使用 `@oai/artifact-tool`。首次生成时程序会自动建立或修复 `scripts/node_modules` 到本机依赖目录的链接；此链接已排除在 Git 之外。默认从当前 Node 运行环境或 Codex 运行环境查找该包；内网部署可设置 `SOP_NODE_MODULES_PATH`，指向包含 `@oai/artifact-tool` 的 `node_modules` 目录。仅安装 `requirements.txt` 不足以使用 Excel 生成功能。
+**Excel 运行依赖：** 安装 `requirements.txt` 后，维护表、网页导出和快照备份都可由 Python 独立生成，适用于没有 Codex 运行环境的内网机器。若本机已有 `@oai/artifact-tool`，程序仍可使用 Node 生成；该包缺失或 Node 无法启动时自动转用 Python。设置 `SOP_EXCEL_ENGINE=python` 可直接使用 Python 生成。`scripts/node_modules` 是可自动重建的本机链接，不提交到 Git。
 
 ## 目录
 

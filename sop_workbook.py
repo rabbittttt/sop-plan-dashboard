@@ -1,6 +1,5 @@
 """Safe two-way synchronization between the managed SOP workbook and SQLite.
 
-openpyxl is used only to read. The bundled artifact-tool authoring script writes XLSX.
 The hidden baseline is verified against a persistent export ledger, then merged per SOP cell.
 """
 from __future__ import annotations
@@ -15,7 +14,8 @@ import threading
 import uuid
 from pathlib import Path
 
-from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
+from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+                         missing_artifact_module, node_executable, python_excel_requested)
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
 
 SCHEMA_VERSION = 5
@@ -307,21 +307,37 @@ class WorkbookSync:
             self._state["last_sync"] = stamp(self.store.clock())
         return self.status()
 
+    def _python_writer(self, payload):
+        try:
+            from sop_xlsx_plan import write_plan_workbook
+            write_plan_workbook(payload)
+        except ModuleNotFoundError as error:
+            if error.name != "openpyxl":
+                raise
+            raise ValidationError("缺少 Python Excel 生成依赖，请安装 requirements.txt。") from error
+
     def _node_writer(self, payload):
+        if python_excel_requested():
+            return self._python_writer(payload)
         node = node_executable()
         script = self.root / "scripts/build_plan_workbook.mjs"
         if not node or not script.is_file():
-            raise ValidationError("计划表生成组件尚未就绪，请检查本机 Node 运行环境和生成脚本。")
+            return self._python_writer(payload)
         try:
             ensure_artifact_tool(self.root, node)
-        except ArtifactDependencyError as error:
-            raise ValidationError(str(error)) from error
-        completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
-                                   text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
-                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (ArtifactDependencyError, OSError):
+            return self._python_writer(payload)
+        try:
+            completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
+                                       text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except OSError:
+            return self._python_writer(payload)
         if completed.returncode:
-            details = (completed.stderr or completed.stdout or "未知错误")[-1200:]
-            raise ValidationError("计划表生成失败：" + details)
+            output = completed.stderr or completed.stdout or "未知错误"
+            if missing_artifact_module(output):
+                return self._python_writer(payload)
+            raise ValidationError("计划表生成失败：" + output[-1200:])
 
     def _context(self):
         sales = self.store.read_sales()

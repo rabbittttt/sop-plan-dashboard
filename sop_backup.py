@@ -12,7 +12,8 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
-from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
+from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+                         missing_artifact_module, node_executable, python_excel_requested)
 from sop_store import ValidationError, stamp
 
 
@@ -28,21 +29,37 @@ class SnapshotBackup:
         self.retry_at = {}
         self.last_export_at = None
 
+    def _python_writer(self, payload):
+        try:
+            from sop_xlsx_backup import write_snapshot_workbook
+            write_snapshot_workbook(payload)
+        except ModuleNotFoundError as error:
+            if error.name != "openpyxl":
+                raise
+            raise ValidationError("缺少 Python Excel 生成依赖，请安装 requirements.txt。") from error
+
     def _node_writer(self, payload):
+        if python_excel_requested():
+            return self._python_writer(payload)
         node = node_executable()
         script = self.root / "scripts/build_snapshot_workbook.mjs"
         if not node or not script.is_file():
-            raise ValidationError("Excel 备份生成组件尚未就绪，后台将自动重试。")
+            return self._python_writer(payload)
         try:
             ensure_artifact_tool(self.root, node)
-        except ArtifactDependencyError as error:
-            raise ValidationError(str(error)) from error
-        completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
-                                   text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
-                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (ArtifactDependencyError, OSError):
+            return self._python_writer(payload)
+        try:
+            completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
+                                       text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except OSError:
+            return self._python_writer(payload)
         if completed.returncode:
-            details = (completed.stderr or completed.stdout or "未知错误")[-1000:]
-            raise ValidationError("Excel 备份生成失败：" + details)
+            output = completed.stderr or completed.stdout or "未知错误"
+            if missing_artifact_module(output):
+                return self._python_writer(payload)
+            raise ValidationError("Excel 备份生成失败：" + output[-1000:])
 
     def path_for(self, snapshot):
         business_date = date.fromisoformat(snapshot["business_date"]).isoformat()

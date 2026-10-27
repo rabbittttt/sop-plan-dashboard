@@ -27,6 +27,16 @@ class ArtifactDependencyError(RuntimeError):
     """The local Excel writer cannot resolve its required Node package."""
 
 
+def python_excel_requested():
+    """Allow deployments without the Codex Node package to choose Python."""
+    return os.environ.get("SOP_EXCEL_ENGINE", "").strip().lower() == "python"
+
+
+def missing_artifact_module(output):
+    """Only a missing artifact-tool import may switch a failed Node run to Python."""
+    return "ERR_MODULE_NOT_FOUND" in (output or "") and "@oai/artifact-tool" in (output or "")
+
+
 def _artifact_modules(node):
     configured = os.environ.get("SOP_NODE_MODULES_PATH")
     if configured:

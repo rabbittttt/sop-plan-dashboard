@@ -14,7 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
+from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
+                         missing_artifact_module, node_executable, python_excel_requested)
 from sop_store import ValidationError, validate_month
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -112,19 +113,35 @@ class PlanExport:
         self.timeout = timeout
         self.slots = threading.BoundedSemaphore(2)
 
+    def _python_writer(self, payload):
+        try:
+            from sop_xlsx_export import write_export_workbook
+            write_export_workbook(payload)
+        except ModuleNotFoundError as error:
+            if error.name != "openpyxl":
+                raise
+            raise ExportError("缺少 Python Excel 生成依赖，请安装 requirements.txt。") from error
+
     def _node_writer(self, payload):
+        if python_excel_requested():
+            return self._python_writer(payload)
         node = node_executable()
         script = self.root / "scripts/build_export_workbook.mjs"
         if not node or not script.is_file():
-            raise ExportError("Excel导出组件尚未就绪，请稍后重试。")
+            return self._python_writer(payload)
         try:
             ensure_artifact_tool(self.root, node)
-        except ArtifactDependencyError as error:
-            raise ExportError(str(error)) from error
-        completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False, allow_nan=False),
-                                   text=True, encoding="utf-8", capture_output=True, timeout=self.timeout, cwd=self.root,
-                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (ArtifactDependencyError, OSError):
+            return self._python_writer(payload)
+        try:
+            completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False, allow_nan=False),
+                                       text=True, encoding="utf-8", capture_output=True, timeout=self.timeout, cwd=self.root,
+                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except OSError:
+            return self._python_writer(payload)
         if completed.returncode:
+            if missing_artifact_module(completed.stderr or completed.stdout):
+                return self._python_writer(payload)
             LOGGER.error("Excel export writer failed (exit %s): %s", completed.returncode,
                          (completed.stderr or completed.stdout or "no diagnostic output")[-2000:])
             raise ExportError("Excel导出生成失败，请稍后重试。")
