@@ -273,11 +273,12 @@ def _key(pid, month):
 
 
 class WorkbookSync:
-    def __init__(self, store, path, writer=None, root=None):
+    def __init__(self, store, path, writer=None, root=None, auto_create=True):
         self.store = store
         self.path = Path(path).resolve()
         self.root = Path(root or Path(__file__).resolve().parent).resolve()
         self.writer = writer or self._node_writer
+        self.auto_create = auto_create
         self.lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._last_file_stat = None
@@ -551,9 +552,12 @@ class WorkbookSync:
 
     def _parse_inline(self, workbook, metadata, expected):
         from sop_table import parse_inline_sheet
-        if (metadata.get("layout_version") != expected.get("layout_version")
-                or expected.get("layout_version") not in {LAYOUT_VERSION, "continuous-inline-v1"}):
+        if expected.get("layout_version") not in {LAYOUT_VERSION, "continuous-inline-v1"}:
             raise ValidationError("主表布局标识已被改动，请恢复原表后重试。")
+        # The export token resolves to an immutable server layout. A changed
+        # label in _meta carries no mapping authority; validate the actual
+        # workbook against that layout, then replace it with a clean export.
+        metadata_layout_changed = metadata.get("layout_version") != expected["layout_version"]
         if "_layout" not in workbook.sheetnames or workbook["_layout"].sheet_state == "visible":
             raise ValidationError("计划表缺少隐藏的版本月份映射。")
         mappings = list(workbook["_layout"].iter_rows(values_only=True))
@@ -575,7 +579,8 @@ class WorkbookSync:
         rows = list(workbook[spec["name"]].iter_rows(values_only=True))
         def cell_at(row, column):
             return rows[row-1][column-1] if row <= len(rows) and column <= len(rows[row-1]) else None
-        expected["_structure_changed"] = any(cell_at(row["row"], spec["key_column"]) != row["key"] for row in spec["rows"])
+        expected["_structure_changed"] = metadata_layout_changed or any(
+            cell_at(row["row"], spec["key_column"]) != row["key"] for row in spec["rows"])
         expected["_structure_changed"] |= any(cell_at(*coordinate_to_tuple(address)) != formula for address, formula in spec["formulas"].items())
         return {_key(item["product_id"], item["month"]): item["sop"] for item in parsed["values"]}
 
@@ -884,8 +889,18 @@ class WorkbookSync:
                         self._last_file_stat = observed_stat
                     else:
                         observed_digest = self._last_digest
-                elif self._last_digest is not None:
-                    return self._set_status("error", "维护表已被删除或移动，请放回原路径后重试。")
+                else:
+                    if not force_export and not self.auto_create:
+                        # A dashboard can start from the database without an Excel
+                        # maintenance workbook. Web exports remain independent; the
+                        # file is created only when Excel maintenance is requested.
+                        self._last_file_stat = None
+                        self._last_digest = None
+                        self._export_signature = None
+                        self._input_checked = True
+                        return self._set_status("absent", "尚未建立 Excel 维护表；网页计划和导出可正常使用。点击“创建维护表”后生成。")
+                    if self._last_digest is not None and not force_export:
+                        return self._set_status("error", "维护表已被删除或移动，请放回原路径后重试。")
                 self._input_checked = True
                 if force_export or signature != self._export_signature or not self.path.exists() or self._state["status"] == "pending":
                     return self._export(context, signature, observed_digest)

@@ -170,7 +170,7 @@ function planVersionRows(ps,visibleMonths) {
 }
 function workbookStrip() {
   const w=state.workbook_sync||{},bad=['conflict','error'].includes(w.status);
-  const synced=w.status==='synced',label=bad?'Excel同步待处理':({synced:'Excel已同步',pending:'Excel待同步',syncing:'Excel同步中',idle:'Excel准备同步'})[w.status]||'Excel准备同步';
+  const synced=w.status==='synced',label=bad?'Excel同步待处理':({synced:'Excel已同步',absent:'未建维护表',pending:'Excel待同步',syncing:'Excel同步中',idle:'Excel准备同步'})[w.status]||'Excel准备同步';
   return `<span class="sheet-sync ${synced?'synced':bad||w.status==='pending'?'warn':'neutral'}" title="${esc(w.message||'Excel保存后自动同步')}" role="status"><i class="status-dot"></i>${label}</span>${bad?button('查看问题','workbook-status','small'):''}`;
 }
 function planning() {
@@ -191,7 +191,7 @@ function planning() {
     }
   }
   rows+=planRow(ps,brand?`${brand}合计`:'鸿蒙智行合计','total','',visible);
-  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${[...new Set([...brands,...state.products.map(p=>p.brand)])].map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('车型与版本','manage-products','small')}${button('Excel维护','open-workbook','primary small')}${button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
+  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${[...new Set([...brands,...state.products.map(p=>p.brand)])].map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('车型与版本','manage-products','small')}${button(state.workbook_sync?.status==='absent'?'创建维护表':'Excel维护','open-workbook','primary small')}${button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
     <div class="annual-heading"><h1>SOP计划${rolling?' · M+6':''}</h1><p>${period} · ${rolling?'前5个月＋当月＋未来6个月':'全年月度对照'}<span>单位：辆</span></p></div>
     <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button('批量维护','bulk-plan','small',editable.length?'':'disabled')}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}" title="点击${showLocks?'隐藏':'显示'}车型及版本锁单数"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
     <section class="card plan-card annual-sheet${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
@@ -498,6 +498,10 @@ function snapshotRows(d) {
 }
 async function workbookStatusDialog() {
   const w=await api('/api/plan-workbook/status');
+  if(w.status==='absent'){
+    openDialog(`<h2>尚未建立维护表</h2><p class="subtitle">网页计划和导出可以直接使用。只有点击“创建维护表”才会在 input_file 中生成 SOP计划维护.xlsx。</p><p class="form-help">预定位置：${esc(w.path)}</p><div class="dialog-actions">${button('关闭','close-dialog')}${button('先导出模板','export-plan')}${button('创建维护表','open-workbook','primary')}</div>`);
+    return;
+  }
   openDialog(`<h2>计划表同步</h2><p class="subtitle">${esc(w.message||'')}</p><p class="form-help">维护表：${esc(w.path)}</p>${w.conflicts?.length?`<div class="table-scroll"><table class="detail-table"><thead><tr><th>版本 / 月份</th><th>共同基准</th><th>表格数值</th><th>网页当前值</th></tr></thead><tbody>${w.conflicts.map(c=>{const p=state.products.find(p=>p.id===c.product_id);return `<tr><td>${esc(p?.model||'')} ${esc(p?.version||c.product_id)}<small>${esc(conflictField(c))}${c.reason==='plans_changed'?'（导出后计划已更新）':''}</small></td><td>${conflictValue(c)(c.baseline)}</td><td>${conflictValue(c)(c.workbook)}</td><td>${conflictValue(c)(c.database)}</td></tr>`}).join('')}</tbody></table></div><p class="form-help">以下选择仅处理冲突项；没有冲突的修改仍按同一份计划合并。</p><div class="dialog-actions">${button('暂不处理','close-dialog')}${button('冲突项保留网页值','resolve-db')}${button('冲突项采用表格值','resolve-workbook','primary')}</div>`:`<p>保存Excel后自动读取；Excel占用文件时，网页的修改先保存在统一数据库，关闭Excel后回写。</p><div class="dialog-actions">${button('关闭','close-dialog')}${button('重新同步','sync-workbook','primary')}</div>`}`);
 }
 async function compareSnapshots() {
@@ -553,7 +557,13 @@ async function handleAction(action,el) {
   if(action==='manage-products')return productManager();
   if(action==='new-product')return editProduct();
   if(action==='rename-model')return renameModel();
-  if(action==='open-workbook'){await api('/api/plan-workbook/open',{});return toast('已请求打开统一计划表；修改后请保存');}
+  if(action==='open-workbook'){
+    const creating=state.workbook_sync?.status==='absent';
+    await api('/api/plan-workbook/open',{});
+    if($('#edit-dialog').open)closeDialog();
+    await load();
+    return toast(creating?'已创建并打开维护表；修改后请保存':'已请求打开统一计划表；修改后请保存');
+  }
   if(action==='workbook-status')return workbookStatusDialog();
   if(['sync-workbook','resolve-db','resolve-workbook'].includes(action)){
     el.disabled=true;

@@ -129,7 +129,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                 elif path == "/api/plan-workbook/status" and workbook_sync:
                     self._json({**workbook_sync.status(), "source_refresh": source_refresh.status()})
                 elif path == "/api/plan-workbook/download" and workbook_sync:
-                    result = workbook_sync.sync()
+                    result = workbook_sync.sync(force_export=not workbook_sync.path.is_file())
                     if result["status"] in {"conflict", "error", "pending"}:
                         self._json({"error": result["message"], "workbook_sync": result}, 409)
                         return
@@ -257,7 +257,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                     status = workbook_sync.sync(force_export=path.endswith("/export"), choice=body.get("choice"))
                     result = {"ok": status["status"] not in {"conflict", "error"}, **status}
                 elif path == "/api/plan-workbook/open" and workbook_sync:
-                    status = workbook_sync.sync()
+                    status = workbook_sync.sync(force_export=not workbook_sync.path.is_file())
                     if not workbook_sync.path.is_file():
                         raise ValidationError(status["message"])
                     if os.name != "nt":
@@ -312,7 +312,7 @@ def main():
         importlib.import_module("sop_data").refresh(output_path=args.data_dir / "sales.json")
     store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
     store.ensure_daily_snapshots()
-    workbook_sync = WorkbookSync(store, args.plan_file)
+    workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False)
     workbook_sync.sync()
     source_refresh = SalesRefresh(store, workbook_sync, root=ROOT)
     snapshot_backup = SnapshotBackup(store)

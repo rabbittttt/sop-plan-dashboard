@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from sop_store import SOPStore, TZ
+from sop_store import SOPStore, TZ, ValidationError
 from sop_workbook import WorkbookSync
 from tests.test_inline_workbook import change_rows
 from tests.test_workbook_sync import edit_cell
@@ -111,6 +111,55 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         self.assertEqual([sheet[f"{column}5"].value for column in "ABC"], ["=问界", "+M5", "@高配"])
         self.assertTrue(all(sheet[f"{column}5"].data_type == "s" for column in "ABC"))
         self.assertEqual(self.sync._parse(self.path.read_bytes())[4]["a\t2026-10"], None)
+
+    def test_changed_layout_label_keeps_plan_edit_and_regenerates_metadata(self):
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        token, expected, *_ = self.sync._parse(self.path.read_bytes())
+        address = next(item["cell"] for item in expected["layout"]["cells"]
+                       if item["product_id"] == "a" and item["month"] == "2026-10")
+        edit_cell(self.path, "B5", "continuous-inline-v1", sheet=3)
+        edit_cell(self.path, address, 24)
+        status = self.sync.sync()
+        self.assertEqual(status["status"], "synced", status)
+        self.assertEqual(self.store.db.execute(
+            "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 24)
+        workbook = load_workbook(self.path, read_only=True)
+        try:
+            self.assertEqual(workbook["_meta"]["B5"].value, expected["layout_version"])
+            self.assertNotEqual(workbook["_meta"]["B2"].value, token)
+        finally:
+            workbook.close()
+
+    def test_managed_workbook_is_created_only_on_explicit_request(self):
+        on_demand = WorkbookSync(self.store, self.path, auto_create=False)
+        with patch.object(on_demand, "writer", side_effect=AssertionError("unexpected Excel writer")):
+            self.assertEqual(on_demand.sync()["status"], "absent")
+        self.assertFalse(self.path.exists())
+        self.assertEqual(on_demand.sync(force_export=True)["status"], "synced")
+        self.assertTrue(self.path.exists())
+        self.path.unlink()
+        self.assertEqual(on_demand.sync()["status"], "absent")
+        self.assertFalse(self.path.exists())
+        self.assertEqual(on_demand.sync(force_export=True)["status"], "synced")
+
+    def test_changed_layout_label_does_not_bypass_hidden_mapping_validation(self):
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        edit_cell(self.path, "B5", "continuous-inline-v1", sheet=3)
+        edit_cell(self.path, "A2", "unknown-product", sheet=4)
+        status = self.sync.sync()
+        self.assertEqual(status["status"], "error", status)
+        self.assertIn("隐藏的版本月份基准已被改动", status["message"])
+
+    def test_unknown_ledger_layout_stays_unsupported(self):
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        _, expected, *_ = self.sync._parse(self.path.read_bytes())
+        workbook = load_workbook(self.path, read_only=True)
+        try:
+            expected["layout_version"] = "continuous-inline-unsupported"
+            with self.assertRaisesRegex(ValidationError, "主表布局标识已被改动"):
+                self.sync._parse_inline(workbook, {"layout_version": "continuous-inline-unsupported"}, expected)
+        finally:
+            workbook.close()
 
 
 if __name__ == "__main__":

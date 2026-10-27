@@ -12,6 +12,7 @@ import openpyxl
 from sop_export import PlanExport
 from sop_roundtrip import PlanRoundtrip
 from sop_store import SOPStore, TZ
+from sop_workbook import WorkbookSync
 from tests.test_roundtrip import export_body
 from tests.test_workbook_sync import edit_cell
 
@@ -88,6 +89,24 @@ class OfflineExportTest(unittest.TestCase):
         self.assertEqual(self.store.db.execute(
             "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
         self.assertEqual(context["plan_values_by_product"]["a"]["2026-10"], 10)
+
+    def test_first_web_template_exports_and_imports_without_creating_maintenance_file(self):
+        maintenance = self.root / "input_file" / "SOP计划维护.xlsx"
+        sync = WorkbookSync(self.store, maintenance, auto_create=False)
+        self.service = PlanRoundtrip(self.store, sync)
+        self.assertEqual(sync.sync()["status"], "absent")
+        self.assertFalse(maintenance.exists())
+        self.save("a", "2026-10", 10)
+        self.generate(self.body())
+        self.assertEqual(sync.status()["status"], "absent")
+        self.assertFalse(maintenance.exists())
+        edit_cell(self.path, "D7", 41)
+        result = self.service.import_content(self.path.read_bytes())
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["imported"], 1)
+        self.assertFalse(maintenance.exists())
+        self.assertEqual(self.store.db.execute(
+            "SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
 
     def test_without_locks_or_versions_keeps_selected_months_and_read_only(self):
         self.save("a", "2026-10", 10)

@@ -17,6 +17,8 @@ from sop_export import PlanExport
 from sop_roundtrip import PlanRoundtrip
 from sop_store import ConflictError, SOPStore, TZ
 from sop_workbook import WorkbookSync
+from sop_xlsx_export import write_export_workbook
+from sop_xlsx_plan import write_plan_workbook
 from tests.test_plan_export import NoBusinessAccess, fixture_writer, payload
 from tests.test_roundtrip import export_body
 from tests.test_workbook_sync import edit_cell
@@ -123,10 +125,8 @@ class RoundtripHTTPTest(unittest.TestCase):
         self.assertEqual(json.loads(data), self.service.result)
 
 
-@unittest.skipUnless((Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe").is_file(),
-                     "Bundled spreadsheet runtime unavailable")
 class MissingPrimaryWorkbookHTTPTest(unittest.TestCase):
-    def test_download_and_reimport_when_maintenance_workbook_cannot_be_created(self):
+    def test_download_and_reimport_without_creating_maintenance_workbook(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "sales.json"
@@ -136,14 +136,12 @@ class MissingPrimaryWorkbookHTTPTest(unittest.TestCase):
             store = SOPStore(root / "test.sqlite3", source, lambda: datetime(2026, 10, 25, 12, tzinfo=TZ))
             workbook_path = root / "SOP计划维护.xlsx"
 
-            def unavailable(_payload):
-                raise RuntimeError("maintenance writer unavailable")
-
-            sync = WorkbookSync(store, workbook_path, writer=unavailable)
+            sync = WorkbookSync(store, workbook_path, writer=write_plan_workbook, auto_create=False)
+            self.assertEqual(sync.sync()["status"], "absent")
             service = PlanRoundtrip(store, sync)
             server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
             server.RequestHandlerClass = make_handler(store, root, server.server_port,
-                workbook_sync=sync, plan_export=PlanExport(temp_root=root),
+                workbook_sync=sync, plan_export=PlanExport(writer=write_export_workbook, temp_root=root),
                 source_refresh=NoBusinessAccess(), plan_roundtrip=service)
             thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.02), daemon=True)
             thread.start()
@@ -180,6 +178,17 @@ class MissingPrimaryWorkbookHTTPTest(unittest.TestCase):
                 self.assertEqual(status, 200, content[:500])
                 self.assertEqual(json.loads(content)["imported"], 1)
                 self.assertEqual(store.db.execute("SELECT sop FROM plans WHERE product_id='a' AND month='2026-10'").fetchone()[0], 41)
+                self.assertFalse(workbook_path.exists())
+
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+                try:
+                    connection.request("GET", "/api/plan-workbook/download")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    self.assertTrue(response.read().startswith(b"PK"))
+                finally:
+                    connection.close()
+                self.assertTrue(workbook_path.exists())
             finally:
                 server.shutdown()
                 thread.join()
