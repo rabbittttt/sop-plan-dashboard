@@ -87,7 +87,7 @@ def write_plan_workbook(payload: dict) -> None:
 
     workbook = Workbook()
     workbook.remove(workbook.active)
-    caches = {}
+    caches, hidden_columns = {}, {}
     for spec in payload["layout"]["sheets"]:
         sheet = workbook.create_sheet(spec["name"])
         columns = spec["columns"]
@@ -95,7 +95,8 @@ def write_plan_workbook(payload: dict) -> None:
         setup_plan_sheet(sheet, last_row=spec["last_row"], last_column=spec["last_column"],
                          visible_last_column=spec["visible_last_column"], columns=columns,
                          header_row=spec["header_row"], first_data_row=spec["first_data_row"])
-        _literal(sheet.cell(1, 1), f"SOP 跨年计划（{payload['months'][0]}—{payload['months'][-1]}）")
+        _literal(sheet.cell(1, 1), "SOP计划")
+        _literal(sheet.cell(1, 4), f"{payload['months'][0]}—{payload['months'][-1]}")
         _literal(sheet.cell(2, 1), "单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。保存后重算合计。")
         for offset, header in enumerate(spec["headers"]):
             for column, value in enumerate(header, 1):
@@ -152,6 +153,7 @@ def write_plan_workbook(payload: dict) -> None:
             sheet.merge_cells(reference)
         sheet.freeze_panes = f"D{spec['first_data_row']}"
         caches[sheet.title] = _formula_results(sheet, spec["formulas"])
+        hidden_columns[sheet.title] = (spec["visible_last_column"] + 1, spec["last_column"])
 
     sync = workbook.create_sheet("_sync")
     sync.append(["product_id", "month", "baseline_sop", "revision"])
@@ -188,4 +190,4 @@ def write_plan_workbook(payload: dict) -> None:
     output = Path(payload["output_path"])
     output.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output)
-    write_formula_caches(output, workbook.sheetnames, caches)
+    write_formula_caches(output, workbook.sheetnames, caches, hidden_columns)

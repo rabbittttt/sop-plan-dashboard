@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
-import { column, planTitle, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
+import { column, planTitle, planPeriod, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
 import { PYTHON } from './runtime.mjs';
 
 // One JSON payload on stdin; only the result is emitted on stdout.
@@ -57,7 +57,8 @@ async function main() {
     sheetControls[spec.name] = {hidden_start:spec.product_column,freeze_rows:spec.first_data_row-1,top_left:`D${spec.first_data_row}`,structural:inline,hidden_rows:spec.rows.filter(r=>r.hidden).map(r=>r.row)};
     setupPlanSheet(sheet, {lastColumn:spec.last_column,visibleLastColumn:spec.visible_last_column,lastRow:spec.last_row,columns:spec.columns,headerRow:spec.header_row,firstDataRow:spec.first_data_row});
     sheet.getRange(`${column(spec.product_column)}:${last}`).format.columnWidth = 24;
-    write(sheet, 1, 1, [[planTitle(data.months)]]);
+    write(sheet, 1, 1, [[planTitle()]]);
+    write(sheet, 1, 4, [[planPeriod(data.months)]]);
     write(sheet, 2, 1, [[inline?'单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。保存后重算合计。':'单位：辆。空白表示未填写，0表示明确不安排。历史月灰底，可修正；深灰格只读。“未适用”无需填0。新增车型/版本在表底填写，保存后自动并入目录。']]);
     write(sheet, spec.header_row, 1, spec.headers);
     if (spec.manual_section) {
@@ -166,7 +167,8 @@ for index,name in enumerate(config['names'],1):
         controls=config['sheetControls'][name]
         cols=root.find('m:cols',ns)
         for col in cols if cols is not None else []:
-            if int(col.attrib['min'])>=controls['hidden_start']: col.set('hidden','1')
+            if int(col.attrib['min'])>=controls['hidden_start']:
+                col.attrib.update({'hidden':'1','width':'0','customWidth':'1'})
         view=root.find('m:sheetViews/m:sheetView',ns)
         if view is not None:
             pane=view.find('m:pane',ns)

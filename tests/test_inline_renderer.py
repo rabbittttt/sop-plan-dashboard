@@ -97,7 +97,7 @@ class InlineRendererTest(unittest.TestCase):
         cls.primary = generate("build_plan_workbook.mjs", input_payload(), "maintenance")
         cls.export = generate("build_export_workbook.mjs", export_payload(), "export")
         cls.partial = generate("build_export_workbook.mjs", export_payload(["2026-10", "2026-12", "2027-02"], locks=True), "with-locks", preview=True)
-        cls.report = generate("build_export_workbook.mjs", export_payload(["2026-12"], versions=False), "summary")
+        cls.report = generate("build_export_workbook.mjs", export_payload(["2026-12"], versions=False), "summary", preview=True)
 
     def test_input_and_export_have_same_visible_grid_and_no_second_input_area(self):
         source = openpyxl.load_workbook(self.primary)["SOP计划"]
@@ -146,7 +146,15 @@ class InlineRendererTest(unittest.TestCase):
     def test_summary_only_remains_readonly_without_extra_input_area(self):
         wb = openpyxl.load_workbook(self.report)
         self.assertFalse(wb["_sop_import"]["B3"].value)
-        self.assertTrue(wb["SOP计划"].protection.sheet)
+        sheet = wb["SOP计划"]
+        self.assertTrue(sheet.protection.sheet)
+        self.assertEqual(sheet["A1"].value, "SOP计划")
+        self.assertEqual(sheet["C1"].value, "2026-12")
+        self.assertEqual(sheet["A5"].value, "问界")
+        self.assertIn("A5:A6", {str(area) for area in sheet.merged_cells.ranges})
+        for letter in "EFG":
+            self.assertTrue(sheet.column_dimensions[letter].hidden)
+            self.assertEqual(sheet.column_dimensions[letter].width, 0)
         self.assertTrue(all(r["kind"] != "manual_entry" for r in manifest(wb)["rows"]))
 
     def test_legacy_parity_reader_selects_new_contract_after_upgrade(self):

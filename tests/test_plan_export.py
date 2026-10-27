@@ -15,6 +15,8 @@ from server import make_handler
 from sop_export import ExportError, MAX_REQUEST_BYTES, MAX_SAFE_INTEGER, PlanExport, validate_export
 from sop_store import ValidationError
 
+NO_BODY = object()
+
 
 def payload():
     return {"schema_version": 1, "current_month": "2026-10", "months": ["2026-12", "2027-01"],
@@ -183,7 +185,8 @@ class ExportHTTPTest(unittest.TestCase):
 
     def request(self, body=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.http.server_port, timeout=5)
-        connection.request("POST", "/api/plans/export-xlsx", json.dumps(body if body is not None else payload()),
+        wire_body = None if body is NO_BODY else json.dumps(body if body is not None else payload())
+        connection.request("POST", "/api/plans/export-xlsx", wire_body,
                            headers or {"Content-Type": "application/json"})
         response = connection.getresponse()
         result = response.status, dict(response.getheaders()), response.read()
@@ -200,12 +203,14 @@ class ExportHTTPTest(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_request_origin_types_shape_and_size_rejections_are_json(self):
+        # These checks reject at the headers; an unread POST body can trigger a
+        # Windows TCP reset before the client receives the JSON response.
         for body, headers, expected in [
             ({}, None, 400),
-            (payload(), {"Content-Type": "text/plain"}, 400),
-            (payload(), {"Content-Type": "application/json", "Origin": "https://evil.example"}, 403),
-            (payload(), {"Content-Type": "application/json", "Host": "evil.example"}, 403),
-            ({}, {"Content-Type": "application/json", "Content-Length": str(MAX_REQUEST_BYTES + 1)}, 400),
+            (NO_BODY, {"Content-Type": "text/plain"}, 400),
+            (NO_BODY, {"Content-Type": "application/json", "Origin": "https://evil.example"}, 403),
+            (NO_BODY, {"Content-Type": "application/json", "Host": "evil.example"}, 403),
+            (NO_BODY, {"Content-Type": "application/json", "Content-Length": str(MAX_REQUEST_BYTES + 1)}, 400),
         ]:
             code, response_headers, data = self.request(body, headers)
             self.assertEqual(code, expected)

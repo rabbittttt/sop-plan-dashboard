@@ -20,6 +20,9 @@ from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, hori
 
 SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
+# Bump this when the visible managed workbook format changes without changing
+# its trusted cell map. Old exports omit the field and resolve to revision 0.
+PRESENTATION_VERSION = 1
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -100,7 +103,10 @@ def _signature(context):
         keys += ["schema_version", "layout_version", "layout", "plan_end", "editable_months"]
     if context.get("schema_version") in (3, 4, 5):
         keys += ["current_month", "business_months"]
-    return hashlib.sha256(json.dumps({key: context[key] for key in keys}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    signed = {key: context[key] for key in keys}
+    if context.get("schema_version") == 5:
+        signed["presentation_version"] = context.get("presentation_version", 0)
+    return hashlib.sha256(json.dumps(signed, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _continuous_layout(products, months, editable_months, current_month, plans=None, include_manual=True):
@@ -360,6 +366,7 @@ class WorkbookSync:
                           "plan_end": plan_end, "editable_months": editable_months,
                           "current_month": current, "business_months": business_months,
                           "schema_version": SCHEMA_VERSION, "layout_version": LAYOUT_VERSION,
+                          "presentation_version": PRESENTATION_VERSION,
                           "layout": _inline_layout(products, months, editable_months, current, plans)}
         signature = _signature(signature_data)
         return {**signature_data, "plans": list(plans.values())}, signature

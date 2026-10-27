@@ -50,15 +50,20 @@ def setup_plan_sheet(sheet, *, last_row, last_column, visible_last_column,
             sheet.column_dimensions[get_column_letter(item["column"])].width = 14
     for column in range(visible_last_column + 1, last_column + 1):
         dimension = sheet.column_dimensions[get_column_letter(column)]
-        dimension.width = 24
+        dimension.width = 0
         dimension.hidden = True
 
-    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=visible_last_column)
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=identity_columns)
+    sheet.merge_cells(start_row=1, start_column=identity_columns + 1,
+                      end_row=1, end_column=visible_last_column)
     sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=visible_last_column)
     title = sheet.cell(1, 1)
     title.font = Font(name="Microsoft YaHei", size=18, color=TITLE_BLUE, bold=True)
     title.alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[1].height = 40
+    period = sheet.cell(1, identity_columns + 1)
+    period.font = Font(name="Microsoft YaHei", size=12, color="52677C", bold=True)
+    period.alignment = Alignment(horizontal="left", vertical="center")
     subtitle = sheet.cell(2, 1)
     subtitle.font = Font(name="Microsoft YaHei", size=10, color="52677C")
     subtitle.alignment = Alignment(horizontal="left", vertical="center")
@@ -124,9 +129,10 @@ def style_plan_row(sheet, *, row, kind, visible_last_column, columns,
             cell.font = Font(name="Microsoft YaHei", size=11, bold=True, color=RED)
 
 
-def write_formula_caches(path, sheet_names, cached_values):
-    """Populate simple formula caches so data_only readers see totals before Excel opens."""
+def write_formula_caches(path, sheet_names, cached_values, hidden_columns=None):
+    """Populate formula caches and conceal import-only columns in the saved XLSX."""
     path = Path(path)
+    hidden_columns = hidden_columns or {}
     main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     ET.register_namespace("", main_ns)
     ET.register_namespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
@@ -137,7 +143,8 @@ def write_formula_caches(path, sheet_names, cached_values):
         entry_map = {info.filename: content for info, content in entries}
         for index, name in enumerate(sheet_names, 1):
             values = cached_values.get(name, {})
-            if not values:
+            hidden_range = hidden_columns.get(name)
+            if not values and not hidden_range:
                 continue
             member = f"xl/worksheets/sheet{index}.xml"
             root = ET.fromstring(entry_map[member])
@@ -156,6 +163,31 @@ def write_formula_caches(path, sheet_names, cached_values):
                         raise ValueError(f"汇总缓存必须是非负整数：{name}!{address}")
                     cell.attrib.pop("t", None)
                     ET.SubElement(cell, tag("v")).text = str(value)
+            if hidden_range:
+                first, last = hidden_range
+                cols = root.find(tag("cols"))
+                if cols is None:
+                    cols = ET.Element(tag("cols"))
+                    sheet_data = root.find(tag("sheetData"))
+                    root.insert(list(root).index(sheet_data), cols)
+                covered = set()
+                for col in list(cols):
+                    low, high = int(col.attrib["min"]), int(col.attrib["max"])
+                    if high < first or low > last:
+                        continue
+                    if low < first:
+                        col.set("max", str(first - 1))
+                        concealed = copy(col)
+                        concealed.set("min", str(first))
+                        concealed.set("max", str(high))
+                        cols.insert(list(cols).index(col) + 1, concealed)
+                        col, low = concealed, first
+                    col.attrib.update({"hidden": "1", "width": "0", "customWidth": "1"})
+                    covered.update(range(low, min(high, last) + 1))
+                for number in range(first, last + 1):
+                    if number not in covered:
+                        ET.SubElement(cols, tag("col"), {"min": str(number), "max": str(number),
+                                                         "hidden": "1", "width": "0", "customWidth": "1"})
             replacements[member] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     temporary = path.with_name(path.name + ".cache.tmp")
     try:

@@ -44,8 +44,12 @@ def _text(cell, value):
         cell.data_type = "s"
 
 
-def _title(months):
-    return f"SOP 跨年计划（{months[0]}—{months[-1]}）"
+def _title():
+    return "SOP计划"
+
+
+def _period(months):
+    return months[0] if months[0] == months[-1] else f"{months[0]}—{months[-1]}"
 
 
 def _subtitle(data, inline):
@@ -217,7 +221,7 @@ def _layout(data):
             row = total_row(field, model_totals[field], "brand_total", brand + (" 锁单" if field == "锁单数" else "") + " 合计")
             merge_total(row)
             brand_totals[field].append(row)
-        if not inline:
+        if not inline or not data["include_versions"]:
             first = next(r for r in rows if r["row"] == brand_first)
             first["labels"][0] = brand
             if next_row - brand_first > 1:
@@ -273,14 +277,12 @@ def write_export_workbook(payload: dict) -> None:
     setup_plan_sheet(sheet, last_row=layout["last_row"], last_column=layout["last_column"],
                      visible_last_column=layout["width"], columns=layout["columns"],
                      identity_columns=len(layout["identity"]))
-    _text(sheet.cell(1, 1), _title(data["months"]))
+    _text(sheet.cell(1, 1), _title())
+    _text(sheet.cell(1, layout["first_value"]), _period(data["months"]))
     _text(sheet.cell(2, 1), _subtitle(data, layout["inline"]))
     if layout["inline"] and layout["width"] <= 6:
         sheet.row_dimensions[2].height = 58 if layout["width"] <= 4 else 44
         sheet.cell(2, 1).alignment = Alignment(vertical="center", wrap_text=True)
-        if layout["width"] <= 4:
-            sheet.row_dimensions[1].height = 64
-            sheet.cell(1, 1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for row_index, header in enumerate(layout["headers"], 3):
         for column, value in enumerate(header, 1):
             if value is not None:
@@ -369,4 +371,5 @@ def write_export_workbook(payload: dict) -> None:
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
     workbook.save(output)
-    write_formula_caches(output, workbook.sheetnames, {sheet.title: caches})
+    hidden = {sheet.title: (layout["width"] + 1, layout["last_column"])} if layout["inline"] else {}
+    write_formula_caches(output, workbook.sheetnames, {sheet.title: caches}, hidden)

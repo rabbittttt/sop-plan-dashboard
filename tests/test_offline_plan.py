@@ -52,6 +52,9 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         workbook = load_workbook(self.path, data_only=True)
         self.addCleanup(workbook.close)
         sheet = workbook["SOP计划"]
+        self.assertEqual(sheet["A1"].value, "SOP计划")
+        self.assertEqual(sheet["D1"].value, "2026-01—2027-12")
+        self.assertIn("A1:C1", {str(area) for area in sheet.merged_cells.ranges})
         self.assertEqual(sheet.freeze_panes, "D5")
         self.assertIn("A5:A6", {str(area) for area in sheet.merged_cells.ranges})
         self.assertIn("B5:B6", {str(area) for area in sheet.merged_cells.ranges})
@@ -67,6 +70,7 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         self.assertEqual(workbook["_layout"].sheet_state, "hidden")
         from openpyxl.utils import get_column_letter
         self.assertTrue(sheet.column_dimensions[get_column_letter(expected["layout"]["sheets"][0]["product_column"])].hidden)
+        self.assertEqual(sheet.column_dimensions[get_column_letter(expected["layout"]["sheets"][0]["product_column"])].width, 0)
 
         address = next(cell["cell"] for cell in expected["layout"]["cells"]
                        if cell["product_id"] == "a" and cell["month"] == "2026-10")

@@ -8,8 +8,12 @@ export function column(n) {
   return value;
 }
 
-export function planTitle(months) {
-  return `SOP 跨年计划（${months[0]}—${months.at(-1)}）`;
+export function planTitle() {
+  return 'SOP计划';
+}
+
+export function planPeriod(months) {
+  return months[0] === months.at(-1) ? months[0] : `${months[0]}—${months.at(-1)}`;
 }
 
 // This function never writes user text. Call the adapter's safe text writer for
@@ -34,11 +38,20 @@ export function setupPlanSheet(sheet, {
   for (const col of columns.filter(c=>c.kind==='year_total')) {
     sheet.getRange(`${column(col.column)}:${column(col.column)}`).format.columnWidth = 14;
   }
-  sheet.getRange(`A1:${visibleLast}1`).merge();
+  if (lastColumn > visibleLastColumn) {
+    sheet.getRange(`${column(visibleLastColumn + 1)}:${last}`).format.columnWidth = 24;
+  }
+  const identityLast = column(identityColumns), periodFirst = column(identityColumns + 1);
+  sheet.getRange(`A1:${identityLast}1`).merge();
+  sheet.getRange(`${periodFirst}1:${visibleLast}1`).merge();
   sheet.getRange(`A2:${visibleLast}2`).merge();
-  sheet.getRange(`A1:${visibleLast}1`).format = {
+  sheet.getRange(`A1:${identityLast}1`).format = {
     font:{name:'Microsoft YaHei',size:18,bold:true,color:'#086BAE'},
     horizontalAlignment:'center', rowHeight:40,
+  };
+  sheet.getRange(`${periodFirst}1:${visibleLast}1`).format = {
+    font:{name:'Microsoft YaHei',size:12,bold:true,color:'#52677C'},
+    horizontalAlignment:'left', rowHeight:40,
   };
   sheet.getRange(`A2:${visibleLast}2`).format = {
     font:{name:'Microsoft YaHei',size:10,color:'#52677C'},

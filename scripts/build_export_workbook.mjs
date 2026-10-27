@@ -6,7 +6,7 @@ import { PYTHON } from './runtime.mjs';
 
 const log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 console.log = log;
-import { column, planTitle, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
+import { column, planTitle, planPeriod, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
 const quantity = value => value === null || (Number.isSafeInteger(value) && value >= 0);
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -150,7 +150,7 @@ function makeLayout(data, parsed) {
       const row=totalRow(field,modelTotals.get(field),'brand_total',brand+(field==='锁单数'?' 锁单':'')+' 合计');
       mergeTotal(row.row);brandTotals.get(field).push(row);
     }
-    if(!inline) {
+    if(!inline||!data.include_versions) {
       rows.find(r=>r.row===brandFirst).labels[0]=brand;
       if(next-brandFirst>1)merges.push('A'+brandFirst+':A'+(next-1));
     }
@@ -206,13 +206,13 @@ async function main() {
     :data.roundtrip
     ?'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。'+(data.include_versions?'修改月计划量后保存，在看板“导入Excel”回填。':'当前为车型汇总，只读；回填计划请导出版本明细。')
     :'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；带“锁单”字样的行为交车锁单数。导出副本不参与计划同步。';
-  setupPlanSheet(sheet,{lastColumn:layout.lastColumn,visibleLastColumn:layout.width,lastRow:layout.lastRow,identityColumns:layout.identity.length,columns:layout.columns,headers:layout.headers,title:planTitle(data.months),subtitle});
+  setupPlanSheet(sheet,{lastColumn:layout.lastColumn,visibleLastColumn:layout.width,lastRow:layout.lastRow,identityColumns:layout.identity.length,columns:layout.columns});
   if(layout.inline&&layout.width<=6) {
     sheet.getRange('A2:'+last+'2').format={wrapText:true,rowHeight:layout.width<=4?58:44};
-    if(layout.width<=4)sheet.getRange('A1:'+last+'1').format={wrapText:true,rowHeight:64};
   }
   if(layout.inline)sheet.getRange(column(layout.productColumn)+':'+column(layout.lastColumn)).format.columnWidth=24;
-  write(1,1,[[planTitle(data.months)]]);write(2,1,[[subtitle]]);write(3,1,layout.headers);
+  write(1,1,[[planTitle()]]);write(1,layout.firstValue,[[planPeriod(data.months)]]);
+  write(2,1,[[subtitle]]);write(3,1,layout.headers);
   if(layout.section) {
     write(layout.section.title_row,1,[[layout.section.title]]);write(layout.section.header_row,1,layout.headers);
     styleManualSection(sheet,{section:layout.section,visibleLastColumn:layout.width,lastColumn:layout.lastColumn,columns:layout.columns});
@@ -331,8 +331,25 @@ if not config['structural']:
     protection=ET.Element(tag('sheetProtection'),{'sheet':'1','objects':'1','scenarios':'1','selectLockedCells':'0','selectUnlockedCells':'0'})
     root.insert(list(root).index(root.find('m:sheetData',ns))+1,protection)
 if config['hidden_start']:
-    for col in root.findall('m:cols/m:col',ns):
-        if int(col.attrib['min'])>=config['hidden_start']: col.set('hidden','1')
+    start,end=config['hidden_start'],config['hidden_end']
+    cols=root.find('m:cols',ns)
+    if cols is None:
+        cols=ET.Element(tag('cols'))
+        root.insert(list(root).index(root.find('m:sheetData',ns)),cols)
+    covered=set()
+    for col in list(cols):
+        first,last=int(col.attrib['min']),int(col.attrib['max'])
+        if last<start or first>end: continue
+        if first<start:
+            col.set('max',str(start-1))
+            hidden=copy.deepcopy(col)
+            hidden.set('min',str(start));hidden.set('max',str(last))
+            cols.insert(list(cols).index(col)+1,hidden)
+            col=hidden;first=start
+        col.attrib.update({'hidden':'1','width':'0','customWidth':'1'})
+        covered.update(range(first,min(last,end)+1))
+    for number in range(start,end+1):
+        if number not in covered: ET.SubElement(cols,tag('col'),{'min':str(number),'max':str(number),'width':'0','customWidth':'1','hidden':'1'})
 hidden_rows=set(config['hidden_rows'])
 for row in root.findall('m:sheetData/m:row',ns):
     if int(row.attrib['r']) in hidden_rows: row.set('hidden','1')
@@ -343,7 +360,7 @@ temporary=p.with_name(p.name+'.presentation.tmp')
 with zipfile.ZipFile(temporary,'w',compression=zipfile.ZIP_DEFLATED) as z:
     for filename,(info,content) in entries.items(): z.writestr(info,content)
 temporary.replace(p)
-`,output],{input:JSON.stringify({text:exactText,unlocked,frozen:layout.identity.length,topLeft:`${firstValue}5`,structural:layout.inline&&data.include_versions,hidden_start:layout.inline?layout.productColumn:null,hidden_rows:layout.rows.filter(r=>r.hidden).map(r=>r.row)}),encoding:'utf8',windowsHide:true});
+`,output],{input:JSON.stringify({text:exactText,unlocked,frozen:layout.identity.length,topLeft:`${firstValue}5`,structural:layout.inline&&data.include_versions,hidden_start:layout.inline?layout.productColumn:null,hidden_end:layout.lastColumn,hidden_rows:layout.rows.filter(r=>r.hidden).map(r=>r.row)}),encoding:'utf8',windowsHide:true});
   if(finalized.status!==0)throw new Error(finalized.stderr||'Export presentation finalization failed');
   if(data.preview_path) {
     const reopened=await SpreadsheetFile.importXlsx(await FileBlob.load(output));
