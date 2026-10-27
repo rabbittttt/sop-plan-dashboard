@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from sop_runtime import node_executable
+from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
 from sop_store import ValidationError, validate_month
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -117,6 +117,10 @@ class PlanExport:
         script = self.root / "scripts/build_export_workbook.mjs"
         if not node or not script.is_file():
             raise ExportError("Excel导出组件尚未就绪，请稍后重试。")
+        try:
+            ensure_artifact_tool(self.root, node)
+        except ArtifactDependencyError as error:
+            raise ExportError(str(error)) from error
         completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False, allow_nan=False),
                                    text=True, encoding="utf-8", capture_output=True, timeout=self.timeout, cwd=self.root,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)

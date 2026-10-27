@@ -64,6 +64,10 @@ function metricLabel() { return (state.meta.metrics||[]).find(m=>m.id===metric)?
 function months() { return range==='rolling' ? Array.from({length:12},(_,i)=>shift(state.current_month,i-5)) : yearMonths(); }
 function historyMonths() { if(historyRange==='all') return [...new Set(state.sales.map(s=>s.month))].filter(m=>m<state.current_month).sort(); return state.history_months || [-3,-2,-1].map(n=>shift(state.current_month,n)); }
 function productGenerations(p) { return p.source_generations?.length?p.source_generations:p.generation?[p.generation]:[]; }
+function lockToggleLabel() { return `锁单数：${showLocks?'已显示':'已隐藏'}`; }
+function latestVersionLockMonth() {
+  return (state.sales||[]).filter(r=>r.metric==='locked_orders'&&r.value!=null).map(r=>r.month).sort().at(-1)||'';
+}
 function sumSales(ps,month, data=salesIndex,allowModelTotals=ps.length>1) {
   let value=0,modelReference=false,referenceConflict=false;
   const groups=new Map(),modelScoped=new Set(),known=new Set(),references=[];
@@ -139,7 +143,7 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
     if(isLock) {
       const actual=sumSales(ps,m,salesIndex,!one);
       const modelOnly=one&&state.meta?.version_lock_basis==='model_lock_row'&&(state.model_sales||[]).some(r=>r.generation===p.generation&&r.month===m&&r.value!=null);
-      cell=`<td class="history-cell number${past}" title="${m>state.current_month?'尚未发生':modelOnly?'源表仅提供车型锁单数，未分配至版本':one?'源表“版本／数量”行，版本原值':actual.model_reference?'源表“交车锁单／数量”行，车型原值':'当月来源锁单数'}">${quantity(actual,'—')}</td>`;
+      cell=`<td class="history-cell number${past}" title="${m>state.current_month?'尚未发生':modelOnly?'源表仅提供车型锁单数，未分配至版本':actual.value==null?one?'源表暂无该月版本锁单数':'源表暂无该月车型锁单数':one?'源表“版本／数量”行，版本原值':actual.model_reference?'源表“交车锁单／数量”行，车型原值':'当月来源锁单数'}">${quantity(actual,'—')}</td>`;
     } else {
       const q=sumPlan(ps,m,'sop');
       const open=isPlanMonthOpen(m)&&(!one||canEditProduct(p,m));
@@ -172,7 +176,7 @@ function planning() {
   if(!editable.includes(target))target=editable.find(m=>m===state.current_month)||editable[0]||'';
   const period=rolling?`${shortMonth(visible[0])}—${shortMonth(visible.at(-1))}`:`${planYear}年1—12月`;
   const models=[...new Set(state.products.filter(p=>!brand||p.brand===brand).map(p=>p.model))];
-  const notes=state.meta?.quality||[],modelLockBasis=state.meta?.version_lock_basis==='model_lock_row',versionLockBasis=state.meta?.version_lock_basis==='source_version_quantity';
+  const notes=state.meta?.quality||[],modelLockBasis=state.meta?.version_lock_basis==='model_lock_row',versionLockBasis=state.meta?.version_lock_basis==='source_version_quantity',versionLockLatest=latestVersionLockMonth();
   let rows='';
   for(const b of [...new Set([...brands,...ps.map(p=>p.brand)])]) {
     const bp=ps.filter(p=>p.brand===b);if(!bp.length)continue;
@@ -186,9 +190,9 @@ function planning() {
   rows+=planRow(ps,brand?`${brand}合计`:'鸿蒙智行合计','total','',visible);
   $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${[...new Set([...brands,...state.products.map(p=>p.brand)])].map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('车型与版本','manage-products','small')}${button('Excel维护','open-workbook','primary small')}${button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
     <div class="annual-heading"><h1>SOP计划${rolling?' · M+6':''}</h1><p>${period} · ${rolling?'前5个月＋当月＋未来6个月':'全年月度对照'}<span>单位：辆</span></p></div>
-    <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button('批量维护','bulk-plan','small',editable.length?'':'disabled')}${button('显示锁单数','toggle-locks','small lock-toggle',`aria-label="显示锁单数" aria-pressed="${showLocks}"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
+    <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button('批量维护','bulk-plan','small',editable.length?'':'disabled')}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}" title="点击${showLocks?'隐藏':'显示'}车型及版本锁单数"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
     <section class="card plan-card annual-sheet${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
-    <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?'车型锁单取“交车锁单”行，版本锁单取“版本／数量”行，分别保留原值。':''):''}点击车型展开，点击版本SOP维护。</span></div>
+    <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?`车型锁单取“交车锁单”行，版本锁单取“版本／数量”行；版本锁单最新来源月：${versionLockLatest?shortMonth(versionLockLatest):'暂无'}。`:''):'锁单数已隐藏，可用上方按钮打开。'}点击车型展开版本${showLocks?'锁单和':''}计划。</span></div>
     ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;
 }
 function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';$('#edit-dialog').showModal(); }

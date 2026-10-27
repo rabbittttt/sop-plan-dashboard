@@ -288,6 +288,38 @@ assert.equal(get("sumSales(state.products,'2026-08',salesIndex,false).value"),30
 vm.runInContext("salesIndex=new Map();state.model_sales.push({generation:'new',month:'2026-08',metric:'locked_orders',value:200})",context);
 assert.deepEqual(get("sumSales(state.products,'2026-08',salesIndex,true)"),{value:null,known:0,total:1,reference_conflict:true});
 assert.match(get("planMetricRow(state.products,'M5','model','m',['2026-08'],'locks')"),/来源冲突/);
+// A saved hidden choice is explicit; after enabling locks and expanding M5,
+// source version quantities appear in the rolling view while absent months stay blank.
+const screen = {innerHTML:''};
+const screenContext = vm.createContext({
+  localStorage:{getItem:()=> 'false'},
+  document:{querySelector:selector=>selector==='#app'?screen:null},
+});
+vm.runInContext(source.split("document.addEventListener('click'")[0],screenContext);
+vm.runInContext(`
+  state={current_month:'2026-10',plan_end:'2027-12',plans:[],history_months:['2026-05','2026-08'],
+    meta:{version_lock_basis:'source_version_quantity',quality:[]},
+    products:[
+      {id:'a',brand:'问界',model:'M5',version:'Max',generation:'g',active:true},
+      {id:'b',brand:'问界',model:'M5',version:'Ultra',generation:'g',active:true}
+    ],
+    sales:[
+      {product_id:'a',month:'2026-05',metric:'locked_orders',value:33},
+      {product_id:'b',month:'2026-05',metric:'locked_orders',value:77},
+      {product_id:'a',month:'2026-08',metric:'locked_orders',value:44}
+    ],
+    model_sales:[{generation:'g',month:'2026-05',metric:'locked_orders',value:253}]
+  };
+  metric='locked_orders';indexData();planning();
+`,screenContext);
+assert.match(screen.innerHTML,/锁单数：已隐藏/);
+assert.doesNotMatch(screen.innerHTML,/data-version="a"[^>]*data-plan-metric="locks"/);
+vm.runInContext("showLocks=true;expanded.add('问界|M5');planning()",screenContext);
+assert.match(screen.innerHTML,/锁单数：已显示/);
+assert.match(screen.innerHTML,/版本锁单最新来源月：2026\.08/);
+assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="a"[^]*?版本原值">33<\/td>/);
+assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="b"[^]*?版本原值">77<\/td>/);
+assert.match(screen.innerHTML,/源表暂无该月版本锁单数/);
 vm.runInContext(`
   var saves=0,closedAfterSave=0,saveMessages=[];
   api=async()=>{saves++;return {ok:true}};

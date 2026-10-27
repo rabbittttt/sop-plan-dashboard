@@ -15,7 +15,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from sop_runtime import node_executable
+from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
 
 SCHEMA_VERSION = 5
@@ -312,6 +312,10 @@ class WorkbookSync:
         script = self.root / "scripts/build_plan_workbook.mjs"
         if not node or not script.is_file():
             raise ValidationError("计划表生成组件尚未就绪，请检查本机 Node 运行环境和生成脚本。")
+        try:
+            ensure_artifact_tool(self.root, node)
+        except ArtifactDependencyError as error:
+            raise ValidationError(str(error)) from error
         completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
                                    text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)

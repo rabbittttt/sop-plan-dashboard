@@ -601,6 +601,7 @@ body { background: #fff; }
 .annual-sheet .plan-table tbody .metric-block-start > th, .annual-sheet .plan-table tbody .metric-block-start > td { border-top: 1px solid #aab4c0; }
 .annual-sheet .plan-table tbody th.sticky-name[rowspan="2"] { padding-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #aeb7c1; }
 .annual-sheet .plan-table tbody .history-cell, .annual-sheet .plan-table tbody .sop-cell { color: #34404e; font-weight: 500; }
+.annual-sheet .plan-table tbody .version-row.metric-lock-row .history-cell { color: #243b5c; font-weight: 650; }
 .annual-sheet .plan-table tbody .group-row .number, .annual-sheet .plan-table tbody .total-row .number { color: #b22222; font-weight: 650; }
 .annual-sheet .plan-table .model-row .sticky-name { padding-left: 18px; }
 .annual-sheet .plan-table .version-row .sticky-name { padding-left: 31px; }

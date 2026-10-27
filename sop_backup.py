@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
-from sop_runtime import node_executable
+from sop_runtime import ArtifactDependencyError, ensure_artifact_tool, node_executable
 from sop_store import ValidationError, stamp
 
 
@@ -33,6 +33,10 @@ class SnapshotBackup:
         script = self.root / "scripts/build_snapshot_workbook.mjs"
         if not node or not script.is_file():
             raise ValidationError("Excel 备份生成组件尚未就绪，后台将自动重试。")
+        try:
+            ensure_artifact_tool(self.root, node)
+        except ArtifactDependencyError as error:
+            raise ValidationError(str(error)) from error
         completed = subprocess.run([node, str(script)], input=json.dumps(payload, ensure_ascii=False),
                                    text=True, encoding="utf-8", capture_output=True, timeout=120, cwd=self.root,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
