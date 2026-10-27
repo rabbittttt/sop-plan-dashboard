@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
-import { column, planTitle, planPeriod, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
+import { column, planTitle, planPeriod, planGuidance, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
 import { PYTHON } from './runtime.mjs';
 
 // One JSON payload on stdin; only the result is emitted on stdout.
@@ -59,7 +59,7 @@ async function main() {
     sheet.getRange(`${column(spec.product_column)}:${last}`).format.columnWidth = 24;
     write(sheet, 1, 1, [[planTitle()]]);
     write(sheet, 1, 4, [[planPeriod(data.months)]]);
-    write(sheet, 2, 1, [[inline?'单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。保存后重算合计。':'单位：辆。空白表示未填写，0表示明确不安排。历史月灰底，可修正；深灰格只读。“未适用”无需填0。新增车型/版本在表底填写，保存后自动并入目录。']]);
+    write(sheet, 2, 1, [[inline?planGuidance():'单位：辆。空白表示未填写，0表示明确不安排。历史月灰底，可修正；深灰格只读。“未适用”无需填0。新增车型/版本在表底填写，保存后自动并入目录。']]);
     write(sheet, spec.header_row, 1, spec.headers);
     if (spec.manual_section) {
       const section = spec.manual_section;

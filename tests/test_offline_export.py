@@ -1,4 +1,5 @@
 """The intranet writer must preserve the real download/import contract."""
+import copy
 import json
 import os
 import tempfile
@@ -53,6 +54,41 @@ class OfflineExportTest(unittest.TestCase):
                 self.path.write_bytes(result.path.read_bytes())
         self.service.register(self.path, context)
         return context
+
+    def test_full_template_is_identical_to_maintenance_visible_sheet(self):
+        from sop_xlsx_export import write_export_workbook
+        from sop_xlsx_plan import write_plan_workbook
+        from tests.test_inline_renderer import input_payload, export_payload
+
+        maintenance_path = self.root / "maintenance.xlsx"
+        write_plan_workbook({**input_payload(), "output_path": str(maintenance_path)})
+        write_export_workbook({**export_payload(), "output_path": str(self.path)})
+        with_maintenance = openpyxl.load_workbook(maintenance_path)
+        with_export = openpyxl.load_workbook(self.path)
+        self.addCleanup(with_maintenance.close)
+        self.addCleanup(with_export.close)
+        source, exported = with_maintenance["SOP计划"], with_export["SOP计划"]
+        self.assertEqual(source.max_row, exported.max_row)
+        self.assertEqual(source.max_column, exported.max_column)
+        self.assertEqual(source.freeze_panes, exported.freeze_panes)
+        self.assertEqual(source.sheet_view.showGridLines, exported.sheet_view.showGridLines)
+        self.assertEqual(source.protection, exported.protection)
+        self.assertEqual(set(map(str, source.merged_cells.ranges)),
+                         set(map(str, exported.merged_cells.ranges)))
+        for row in range(1, source.max_row + 1):
+            self.assertEqual(source.row_dimensions[row].height, exported.row_dimensions[row].height)
+            self.assertEqual(source.row_dimensions[row].hidden, exported.row_dimensions[row].hidden)
+            for column in range(1, source.max_column - 2):
+                left, right = source.cell(row, column), exported.cell(row, column)
+                self.assertEqual(left.value, right.value, left.coordinate)
+                for field in ("font", "fill", "border", "alignment", "number_format", "protection"):
+                    self.assertEqual(copy.copy(getattr(left, field)), copy.copy(getattr(right, field)),
+                                     f"{left.coordinate} {field}")
+        for column in range(1, source.max_column + 1):
+            letter = openpyxl.utils.get_column_letter(column)
+            self.assertEqual(source.column_dimensions[letter].width, exported.column_dimensions[letter].width)
+            self.assertEqual(source.column_dimensions[letter].hidden, exported.column_dimensions[letter].hidden)
+        self.assertEqual(source.data_validations, exported.data_validations)
 
     def test_real_export_registers_and_imports_changed_plan(self):
         self.save("a", "2026-10", 10)

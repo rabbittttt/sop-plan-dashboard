@@ -301,6 +301,9 @@ function exportCSV(name,header,rows) {
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000);
 }
 function exportableMonths() { return [...new Set([...planMonths(),...months()])].sort(); }
+function maintenanceExportOptions() {
+  return {includeLocks:false,includeVersions:true,selectedMonths:planMonths(),allProducts:true};
+}
 function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths=[]}={},ps=products()) {
   const allowed=new Set(exportableMonths());
   if(!Array.isArray(selectedMonths)||!selectedMonths.length)throw new Error('请至少选择一个导出月份');
@@ -347,8 +350,8 @@ function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths
   return {headers:['层级','品牌','车型',...(includeVersions?['版本']:[]),'指标',...chosen,'数据说明'],rows,selectedMonths:chosen,annualPlans,rowProductIds,selectedProductIds:ps.map(p=>p.id)};
 }
 async function downloadPlanExport(options) {
-  const result=buildPlanExport(options),chosen=result.selectedMonths,includeVersions=result.headers.includes('版本');
-  const scope=[brand||'全部品牌',model||'全部车型',query?`搜索“${query}”`:''].filter(Boolean).join(' · ');
+  const result=buildPlanExport(options,options.allProducts?state.products:products()),chosen=result.selectedMonths,includeVersions=result.headers.includes('版本');
+  const scope=options.allProducts?'全部品牌 · 全部车型':[brand||'全部品牌',model||'全部车型',query?`搜索“${query}”`:''].filter(Boolean).join(' · ');
   const response=await fetch('/api/plans/export-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
     schema_version:1,current_month:state.current_month,months:chosen,include_locks:!!options.includeLocks,include_versions:includeVersions,
     scope,headers:result.headers,rows:result.rows,annual_plans:result.annualPlans,row_product_ids:result.rowProductIds,selected_product_ids:result.selectedProductIds
@@ -361,31 +364,39 @@ async function downloadPlanExport(options) {
   return result;
 }
 function exportPlans() {
-  const available=exportableMonths(),current=new Set(months()),years=[...new Set(available.map(m=>m.slice(0,4)))],ps=products();
-  const modelCount=new Set(ps.map(p=>JSON.stringify([p.brand,p.model]))).size;
-  const scope=[brand||'全部品牌',model||'全部车型',query?`搜索“${query}”`:''].filter(Boolean).join(' · ');
-  openDialog(`<form id="export-plan-form"><h2>导出SOP计划</h2><p class="subtitle">${esc(scope)} · ${modelCount} 个车型 / ${ps.length} 个版本</p><div id="export-error" class="inline-error" role="alert"></div><fieldset class="export-content-options"><legend>导出内容</legend><label class="export-check"><input type="checkbox" id="export-locks" ${showLocks?'checked':''}><span>包含锁单数</span></label><label class="export-check"><input type="checkbox" id="export-versions" checked><span>版本计划模板（可填写、可导回）</span></label></fieldset><p class="form-help">默认导出版本计划模板。取消勾选后仅导出车型汇总，不能回填计划。</p><div class="export-month-heading"><h3>导出月份</h3><div class="toolbar"><button type="button" class="button ghost small" data-export-months="current">当前视图</button><button type="button" class="button ghost small" data-export-months="all">全部月份</button><button type="button" class="button ghost small" data-export-months="none">清空</button></div></div><div class="export-month-list">${years.map(y=>`<fieldset class="export-month-year"><legend>${y}年</legend><div class="export-month-grid">${available.filter(m=>m.startsWith(y+'-')).map(m=>`<label class="export-check"><input type="checkbox" name="export-month" value="${m}" aria-label="${y}年${Number(m.slice(5))}月" ${current.has(m)?'checked':''}><span>${Number(m.slice(5))}月</span></label>`).join('')}</div></fieldset>`).join('')}</div><p id="export-selection" class="export-selection" role="status"></p><p class="form-help">Excel采用维护输入表的完整版式；包含锁单时增加锁单行。12月后附全年SOP计划量（含未选月份）。空白与0分别保留。含版本的Excel修改后，点击“导入Excel”更新同一份计划；锁单及合计无需填写。</p><div class="dialog-actions">${button('取消','close-dialog')}<button type="submit" class="button primary">确认导出</button></div></form>`);
-  const form=$('#export-plan-form'),monthInputs=$$('input[name="export-month"]',form),save=$('button[type="submit"]',form),versionOption=$('#export-versions',form);
-  versionOption.checked=true;
-  const update=()=>{
-    const count=monthInputs.filter(el=>el.checked).length,template=versionOption.checked;
-    $('#export-selection').textContent=count?`已选 ${count} 个月 · ${template?'版本计划模板，可填写并导入':'只读车型汇总，不含版本明细'}`:'请至少选择一个月份';
-    save.textContent=template?'导出版本计划模板':'导出只读车型汇总';
-    save.disabled=!count||!ps.length;
-    $('#export-error').textContent=ps.length?'':'当前筛选范围没有可导出的车型或版本';
+  const defaults=maintenanceExportOptions(),maintenance=new Set(defaults.selectedMonths),available=exportableMonths(),current=new Set(months());
+  const years=[...new Set(available.map(m=>m.slice(0,4)))],hasFilter=!!(brand||model||query);
+  openDialog(`<form id="export-plan-form"><h2>导出SOP计划</h2><p id="export-scope" class="subtitle"></p><p class="form-help">默认与维护输入表一致：全部车型版本、完整计划周期、只含计划量。导出后可直接填写计划量，再通过“导入Excel”同步。</p><div id="export-error" class="inline-error" role="alert"></div><fieldset class="export-content-options"><legend>导出内容</legend><label class="export-check"><input type="checkbox" id="export-locks"><span>增加锁单行</span></label><label class="export-check"><input type="checkbox" id="export-versions" checked><span>包含版本明细（可填写、可导回）</span></label>${hasFilter?'<label class="export-check"><input type="checkbox" id="export-filtered"><span>仅导出当前筛选</span></label>':''}</fieldset><p class="form-help">取消版本明细后仅导出只读车型汇总，不能回填计划。</p><div class="export-month-heading"><h3>导出月份</h3><div class="toolbar"><button type="button" class="button ghost small" data-export-preset="maintenance">恢复维护表格式</button><button type="button" class="button ghost small" data-export-months="current">当前视图</button><button type="button" class="button ghost small" data-export-months="all">全部月份</button><button type="button" class="button ghost small" data-export-months="none">清空</button></div></div><div class="export-month-list">${years.map(y=>`<fieldset class="export-month-year"><legend>${y}年</legend><div class="export-month-grid">${available.filter(m=>m.startsWith(y+'-')).map(m=>`<label class="export-check"><input type="checkbox" name="export-month" value="${m}" aria-label="${y}年${Number(m.slice(5))}月" ${maintenance.has(m)?'checked':''}><span>${Number(m.slice(5))}月</span></label>`).join('')}</div></fieldset>`).join('')}</div><p id="export-selection" class="export-selection" role="status"></p><p class="form-help">品牌、车型、版本及月份的排版与维护表一致；12月后附全年计划量。空白与0分别保留，合计无需填写。可按需增加锁单行或调整导出月份。</p><div class="dialog-actions">${button('取消','close-dialog')}<button type="submit" class="button primary">导出维护模板</button></div></form>`);
+  const form=$('#export-plan-form'),monthInputs=$$('input[name="export-month"]',form),save=$('button[type="submit"]',form);
+  const versionOption=$('#export-versions',form),lockOption=$('#export-locks',form),filterOption=$('#export-filtered',form);
+  const reset=()=>{
+    versionOption.checked=defaults.includeVersions;lockOption.checked=defaults.includeLocks;
+    if(filterOption)filterOption.checked=false;
+    monthInputs.forEach(input=>input.checked=maintenance.has(input.value));
   };
+  const update=(clearError=true)=>{
+    const selectedMonths=monthInputs.filter(el=>el.checked).map(el=>el.value),count=selectedMonths.length,versions=versionOption.checked;
+    const ps=filterOption?.checked?products():state.products,scope=filterOption?.checked?[brand||'全部品牌',model||'全部车型',query?`搜索“${query}”`:''].filter(Boolean).join(' · '):'全部品牌 · 全部车型';
+    const template=versions&&!lockOption.checked&&!filterOption?.checked&&count===maintenance.size&&selectedMonths.every(m=>maintenance.has(m));
+    $('#export-scope',form).textContent=`${scope} · ${new Set(ps.map(p=>JSON.stringify([p.brand,p.model]))).size} 个车型 / ${ps.length} 个版本`;
+    $('#export-selection',form).textContent=count?`已选 ${count} 个月 · ${template?'与维护输入表一致':versions?'版本计划，可填写并导入':'只读车型汇总'}`:'请至少选择一个月份';
+    save.textContent=template?'导出维护模板':versions?'导出版本计划':'导出只读车型汇总';
+    save.disabled=!count||!ps.length;
+    if(clearError)$('#export-error',form).textContent=ps.length?'':'当前筛选范围没有可导出的车型或版本';
+  };
+  $('[data-export-preset="maintenance"]',form).onclick=()=>{reset();update();};
   $$('[data-export-months]',form).forEach(el=>el.onclick=()=>{monthInputs.forEach(input=>input.checked=el.dataset.exportMonths==='all'||(el.dataset.exportMonths==='current'&&current.has(input.value)));update();});
-  monthInputs.forEach(el=>el.onchange=update);
-  versionOption.onchange=update;
+  [...monthInputs,versionOption,lockOption,...(filterOption?[filterOption]:[])].forEach(el=>el.onchange=()=>update());
   form.onsubmit=async e=>{
     e.preventDefault();if(form.getAttribute('aria-busy')==='true')return;
-    const options={includeLocks:$('#export-locks').checked,includeVersions:$('#export-versions').checked,selectedMonths:monthInputs.filter(el=>el.checked).map(el=>el.value)};
+    const options={includeLocks:lockOption.checked,includeVersions:versionOption.checked,selectedMonths:monthInputs.filter(el=>el.checked).map(el=>el.value),allProducts:!filterOption?.checked};
     const controls=$$('input,button',form),previous=controls.map(el=>el.disabled);
-    form.setAttribute('aria-busy','true');controls.forEach(el=>el.disabled=true);save.textContent='正在生成Excel…';$('#export-error').textContent='';
+    form.setAttribute('aria-busy','true');controls.forEach(el=>el.disabled=true);save.textContent='正在生成Excel…';$('#export-error',form).textContent='';
     try{await downloadPlanExport(options);if($('#export-plan-form')===form)closeDialog();}
-    catch(err){if($('#export-plan-form')===form)$('#export-error').textContent=err.message;else toast(err.message,true);}
-    finally{form.removeAttribute('aria-busy');controls.forEach((el,i)=>el.disabled=previous[i]);update();}
+    catch(err){if($('#export-plan-form')===form)$('#export-error',form).textContent=err.message;else toast(err.message,true);}
+    finally{form.removeAttribute('aria-busy');controls.forEach((el,i)=>el.disabled=previous[i]);if($('#export-plan-form')===form)update(false);}
   };
+  reset();
   update();
 }
 const MAX_PLAN_IMPORT_BYTES=12*1024*1024;

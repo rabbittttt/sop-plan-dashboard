@@ -13,7 +13,7 @@ from openpyxl.styles import Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from sop_xlsx_style import setup_plan_sheet, style_plan_row, write_formula_caches
+from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 _SUM_FORMULA = re.compile(r'^=IF\(COUNT\((.+)\)=0,"",SUM\(\1\)\)$')
@@ -97,7 +97,7 @@ def write_plan_workbook(payload: dict) -> None:
                          header_row=spec["header_row"], first_data_row=spec["first_data_row"])
         _literal(sheet.cell(1, 1), "SOP计划")
         _literal(sheet.cell(1, 4), f"{payload['months'][0]}—{payload['months'][-1]}")
-        _literal(sheet.cell(2, 1), "单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。保存后重算合计。")
+        _literal(sheet.cell(2, 1), plan_guidance())
         for offset, header in enumerate(spec["headers"]):
             for column, value in enumerate(header, 1):
                 if value is not None:

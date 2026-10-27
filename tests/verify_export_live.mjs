@@ -1,4 +1,4 @@
-// Read-only integration check against the running local service.
+// Download integration check; it registers an export token without editing plans.
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
@@ -13,9 +13,9 @@ const context=vm.createContext({localStorage:{getItem:()=>null},liveState:data})
 vm.runInContext(source.split("document.addEventListener('click'")[0],context);
 vm.runInContext('state=liveState;metric="locked_orders";indexData();',context);
 const template=process.argv.includes('--template');
-const result=vm.runInContext(template?'buildPlanExport({includeLocks:false,includeVersions:true,selectedMonths:planMonths()})':'buildPlanExport({includeLocks:true,includeVersions:true,selectedMonths:Array.from({length:12},(_,i)=>shift(state.current_month,i-5))})',context);
+const result=vm.runInContext(template?'buildPlanExport(maintenanceExportOptions(),state.products)':'buildPlanExport({includeLocks:true,includeVersions:true,selectedMonths:Array.from({length:12},(_,i)=>shift(state.current_month,i-5))})',context);
 const request={schema_version:1,current_month:data.current_month,months:result.selectedMonths,include_locks:!template,include_versions:true,scope:'全部品牌 · 全部车型',headers:result.headers,rows:result.rows,annual_plans:result.annualPlans,row_product_ids:result.rowProductIds,selected_product_ids:result.selectedProductIds};
-const out=new URL(template?'output_file/20261024-export-template/':'tests/artifacts/export-live/',root);
+const out=new URL(template?'output_file/template-export/':'tests/artifacts/export-live/',root);
 await fs.mkdir(out,{recursive:true});
 await fs.writeFile(new URL('request.json',out),JSON.stringify(request,null,2));
 const exported=await fetch(base+'/api/plans/export-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -23,5 +23,5 @@ if(!exported.ok)throw new Error(await exported.text());
 assert.match(exported.headers.get('content-type'),/spreadsheetml/);
 const bytes=Buffer.from(await exported.arrayBuffer());
 assert.equal(bytes.subarray(0,2).toString(),'PK');
-await fs.writeFile(new URL('SOP计划导出.xlsx',out),bytes);
+await fs.writeFile(new URL(template?'SOP计划维护模板.xlsx':'SOP计划导出.xlsx',out),bytes);
 console.log(JSON.stringify({status:exported.status,bytes:bytes.length,months:request.months.length,rows:request.rows.length,sync:data.workbook_sync.status,source_refresh:data.source_refresh.status}));

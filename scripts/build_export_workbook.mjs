@@ -6,7 +6,7 @@ import { PYTHON } from './runtime.mjs';
 
 const log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 console.log = log;
-import { column, planTitle, planPeriod, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
+import { column, planTitle, planPeriod, planGuidance, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
 const quantity = value => value === null || (Number.isSafeInteger(value) && value >= 0);
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -202,7 +202,7 @@ async function main() {
   }
   const write=(row,col,values)=>writeTo(sheet,row,col,values);
   const subtitle=layout.inline
-    ?(data.include_versions?'单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。导入后重算合计。锁单不参与维护。':'单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。')
+    ?(data.include_versions?planGuidance(data.include_locks):'单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。')
     :data.roundtrip
     ?'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。'+(data.include_versions?'修改月计划量后保存，在看板“导入Excel”回填。':'当前为车型汇总，只读；回填计划请导出版本明细。')
     :'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；带“锁单”字样的行为交车锁单数。导出副本不参与计划同步。';

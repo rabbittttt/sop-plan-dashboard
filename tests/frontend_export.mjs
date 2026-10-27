@@ -61,6 +61,13 @@ run(`
 `);
 
 const options = {includeLocks:true,includeVersions:true,selectedMonths:['2026-02','2026-01','2026-02']};
+const maintenanceDefaults = get('maintenanceExportOptions()');
+assert.deepEqual(maintenanceDefaults, {includeLocks:false,includeVersions:true,allProducts:true,
+  selectedMonths:Array.from({length:24},(_,i)=>`${2026+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`)});
+run("brand='问界';model='M5';query='Max';range='annual';planYear='2027';showLocks=true");
+assert.deepEqual(get('maintenanceExportOptions()'), maintenanceDefaults,
+  'The maintenance template keeps its full scope regardless of page filters, view or lock visibility.');
+run("brand='';model='';query='';range='rolling';planYear=''");
 context.testOptions = structuredClone(options);
 const detailed = get('buildPlanExport(testOptions)');
 assert.deepEqual(detailed.headers, ['层级','品牌','车型','版本','指标','2026-01','2026-02','数据说明']);

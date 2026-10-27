@@ -111,9 +111,8 @@ class InlineRendererTest(unittest.TestCase):
             self.assertEqual(source.row_dimensions[r].hidden, exported.row_dimensions[r].hidden)
             for c in range(1, visible + 1):
                 left, right = source.cell(r, c), exported.cell(r, c)
-                if (r, c) != (2, 1):
-                    self.assertEqual(left.value, right.value, left.coordinate)
-                for field in ("font", "fill", "border", "alignment", "number_format"):
+                self.assertEqual(left.value, right.value, left.coordinate)
+                for field in ("font", "fill", "border", "alignment", "number_format", "protection"):
                     self.assertEqual(copy.copy(getattr(left, field)), copy.copy(getattr(right, field)), f"{left.coordinate} {field}")
         for c in range(1, visible + 1):
             letter = openpyxl.utils.get_column_letter(c)

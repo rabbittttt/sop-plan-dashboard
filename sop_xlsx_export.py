@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from sop_xlsx_style import setup_plan_sheet, style_plan_row, write_formula_caches
+from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 MAX_SAFE_INTEGER = 2**53 - 1
@@ -55,7 +55,7 @@ def _period(months):
 def _subtitle(data, inline):
     if inline:
         if data["include_versions"]:
-            return "单位：辆。直接插入、删除明细行或修改名称；删除表示停用，历史保留。导入后重算合计。锁单不参与维护。"
+            return plan_guidance(data["include_locks"])
         return "单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。"
     if data.get("roundtrip"):
         return "单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。"
@@ -290,6 +290,7 @@ def write_export_workbook(payload: dict) -> None:
     validation = DataValidation(type="whole", operator="between", formula1=0,
                                 formula2=1000000000000, allow_blank=True)
     validation.showErrorMessage = True
+    validation.errorStyle = "stop"
     validation.errorTitle = "请输入非负整数"
     validation.error = "SOP计划量须为非负整数；未填写时请留空。"
     validation.showInputMessage = True
