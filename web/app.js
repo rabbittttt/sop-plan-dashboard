@@ -12,7 +12,10 @@ const statusText = v => ({official:'正式成绩',incomplete:'数据未齐全',m
 let state, page = 'planning', brand = '', model = '', query = '', target = '', metric = '', range = 'rolling';
 let historyRange = 'recent';
 let planYear = '';
-let showLocks = localStorage.getItem('sop-show-locks') !== 'false';
+// The old toggle text was ambiguous. Reset that saved choice once so the
+// corrected model and version lock rows are visible; future choices persist.
+const lockPreferenceKey = 'sop-show-locks-v2';
+let showLocks = localStorage.getItem(lockPreferenceKey) !== 'false';
 let expanded = new Set(), allExpanded = false, selected = null, snapshotList = [], currentSnapshot = null;
 let planIndex = new Map(), salesIndex = new Map(), shipmentIndex = new Map();
 let owner = localStorage.getItem('sop-owner') || '';
@@ -565,7 +568,7 @@ async function handleAction(action,el) {
   if(action==='expand-all'){allExpanded=!allExpanded;return planning();}
   if(action==='toggle-locks'){
     const scroll=$('.plan-card .table-scroll'),left=scroll?.scrollLeft||0;
-    showLocks=!showLocks;localStorage.setItem('sop-show-locks',String(showLocks));planning();
+    showLocks=!showLocks;localStorage.setItem(lockPreferenceKey,String(showLocks));planning();
     $('.plan-card .table-scroll').scrollLeft=left;
     $('[data-action="toggle-locks"]').focus({preventScroll:true});return;
   }

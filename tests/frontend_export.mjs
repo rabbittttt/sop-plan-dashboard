@@ -4,8 +4,8 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
 const definitions = source.split("document.addEventListener('click'")[0];
-function createContext(savedLocks = null) {
-  const storage = new Map(savedLocks === null ? [] : [['sop-show-locks', savedLocks]]);
+function createContext(savedLocks = null, legacy = false) {
+  const storage = new Map(savedLocks === null ? [] : [[legacy ? 'sop-show-locks' : 'sop-show-locks-v2', savedLocks]]);
   const context = vm.createContext({ localStorage: {
     getItem: key => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, String(value)),
@@ -18,7 +18,8 @@ const run = code => vm.runInContext(code, context);
 const get = code => JSON.parse(JSON.stringify(run(code)));
 const getAsync = async code => JSON.parse(JSON.stringify(await run(code)));
 assert.equal(run('showLocks'), true, 'Lock rows are initially visible.');
-assert.equal(vm.runInContext('showLocks', createContext('false')), false, 'A saved hidden choice survives reload.');
+assert.equal(vm.runInContext('showLocks', createContext('false', true)), true, 'The old ambiguous hidden choice resets to visible once.');
+assert.equal(vm.runInContext('showLocks', createContext('false')), false, 'A new hidden choice survives reload.');
 assert.equal(vm.runInContext('showLocks', createContext('true')), true);
 
 run(`
