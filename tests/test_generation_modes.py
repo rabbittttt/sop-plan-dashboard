@@ -72,9 +72,9 @@ class GenerationModeTest(unittest.TestCase):
         state = self.store.state()
         self.assertNotEqual(state["generation_view"]["signature"], before)
         self.assertNotIn("sum", {p["id"] for p in state["products"]})
-        self.assertNotIn("a", {p["id"] for p in state["products"]})
+        self.assertIn("a", {p["id"] for p in state["products"]})
         virtual = next(p for p in state["products"] if p.get("read_only"))
-        self.assertEqual(set(virtual["member_product_ids"]), {"a", "b"})
+        self.assertEqual(virtual["member_product_ids"], ["b"])
         self.assertEqual(sum(row["value"] for row in state["model_sales"]), 305)
         self.rules.unlink()
         with self.assertRaises((MergeRuleError, ValidationError)):

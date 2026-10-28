@@ -35,24 +35,59 @@ def _product_model_key(product):
     return tuple(normalize_generation(product.get(field)) for field in ("brand", "model"))
 
 
-def _group_candidates(generations, fallback_key, member_owners, model_groups):
-    """Exact generation wins; otherwise use its source brand/model, never a renamed label."""
-    if not generations:
-        return set(model_groups.get(fallback_key, ()))
-    matches = set()
-    for generation in generations:
-        explicit = member_owners.get(normalize_generation(generation))
-        if explicit is not None:
-            matches.add(explicit)
-        else:
-            matches.update(model_groups.get(generation_model_key(generation), ()))
-    return matches
+def generation_display_model(generation, model=None):
+    """Keep year/qualifiers in the visible model; never change source identities."""
+    source_model = normalize_generation(generation).partition(" ")[2].removesuffix("汇总").strip()
+    model = normalize_generation(model) if model is not None else source_model
+    suffix = re.search(r"(?:^|\s)(20\d{2}款.*)$", source_model)
+    if not suffix:
+        return model.removesuffix("汇总").strip()
+    base = re.sub(r"(?:^|\s)20\d{2}款.*$", "", model).removesuffix("汇总").strip()
+    return " ".join(part for part in (base, suffix.group(1)) if part)
 
 
-def _source_model_keys(product):
+def product_display_model(product):
+    model = product.get("catalog_model", product.get("model", ""))
+    labels = list(dict.fromkeys(generation_display_model(generation, model)
+                               for generation in _generations(product)))
+    return " / ".join(labels) if labels else normalize_generation(model)
+
+
+def catalog_model_input(value, product):
+    """Compare editable labels without their source-owned year annotation."""
+    label = normalize_generation(value)
+    suffixes = {match.group(1).removesuffix("汇总").strip()
+                for generation in _generations(product)
+                if (match := re.search(r"(?:^|\s)(20\d{2}款.*)$", normalize_generation(generation)))}
+    if len(suffixes) == 1:
+        suffix = next(iter(suffixes))
+        if label.endswith(" " + suffix):
+            return label[:-len(suffix)].strip()
+    return label
+
+
+def _declared_generations(product):
+    """A manual label is a generation only when it explicitly names a year."""
     generations = _generations(product)
-    return ({generation_model_key(generation) for generation in generations} if generations
-            else {_product_model_key(product)})
+    if generations:
+        return {normalize_generation(generation) for generation in generations}
+    brand, model = _product_model_key(product)
+    if re.search(r"(?:^|\s)20\d{2}款", model):
+        return {normalize_generation(f"{brand} {model}")}
+    return set()
+
+
+def _group_candidates(product, member_owners):
+    """Use only declared complete generations, with BETA as a same-year alias."""
+    generations = _declared_generations(product)
+    if not generations:
+        return set()
+    matches = {member_owners[generation] for generation in generations if generation in member_owners}
+    unmapped = generations - member_owners.keys()
+    if matches and unmapped:
+        raise MergeRuleError("该版本已关联多个代际，只有部分代际属于当前汇总组；请先核对已关联来源并拆分跨代际记录："
+                             + "、".join(sorted(generations)))
+    return matches
 
 
 def _display_labels(data):
@@ -61,12 +96,15 @@ def _display_labels(data):
         result["products"] = []
         for product in data["products"]:
             brand, model = _product_model_key(product)
-            item = {**product, "brand": brand, "model": model}
+            catalog_model = product.get("catalog_model", product.get("model", ""))
+            model = product_display_model(product)
+            item = {**product, "brand": brand, "model": model, "catalog_model": catalog_model}
             if (brand, model) != (product.get("brand"), product.get("model")):
                 item["name"] = " ".join((brand, model, str(product.get("version") or ""))).strip()
             result["products"].append(item)
     if "model_sales" in data:
-        result["model_sales"] = [{**row, **dict(zip(("brand", "model"), _product_model_key(row)))}
+        result["model_sales"] = [{**row, "brand": normalize_generation(row.get("brand")),
+                                  "model": generation_display_model(row.get("generation"), row.get("model", ""))}
                                  if "brand" in row or "model" in row else dict(row)
                                  for row in data["model_sales"]]
     return result
@@ -206,20 +244,15 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
     owners = {}
     normalized_groups = {name: {normalize_generation(member) for member in members} for name, members in groups.items()}
     member_owners = {member: name for name, members in normalized_groups.items() for member in members}
-    model_groups = defaultdict(set)
-    for name, members in groups.items():
-        for member in members:
-            model_groups[generation_model_key(member)].add(name)
     for product in products:
-        matches = _group_candidates(_generations(product), _product_model_key(product), member_owners, model_groups)
+        matches = _group_candidates(product, member_owners)
         if len(matches) > 1:
             raise MergeRuleError(f"版本跨多个汇总组关联，无法避免重复合计：{product.get('model', '')} {product.get('version', '')}")
         if matches:
             owners[product["id"]] = next(iter(matches))
     model_owners = {}
     for index, row in enumerate(detail.get("model_sales", [])):
-        generations = [row["generation"]] if row.get("generation") else []
-        matches = _group_candidates(generations, _product_model_key(row), member_owners, model_groups)
+        matches = _group_candidates(row, member_owners)
         if len(matches) > 1:
             raise MergeRuleError(f"车型锁单跨多个汇总组关联，无法避免重复合计：{row.get('generation') or row.get('model', '')}")
         if matches:
@@ -231,14 +264,15 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
     by_id = {p["id"]: p for p in products}
     for summary, members in groups.items():
         selected = [p for p in products if owners.get(p["id"]) == summary]
-        present = {key for product in selected for key in _source_model_keys(product)}
-        missing = [member for member in members if generation_model_key(member) not in present]
+        present = {generation for product in selected for generation in _declared_generations(product)}
+        missing = [member for member in members if normalize_generation(member) not in present]
         if missing:
             warnings.append(f"{summary} 缺少单代际目录：{'、'.join(missing)}；未补0。")
         versions = defaultdict(list)
         for product in selected:
             versions[product.get("version", "未命名版本")].append(product["id"])
-        brand, model = generation_model_key(summary)
+        brand = normalize_generation(summary).partition(" ")[0]
+        model = generation_display_model(summary)
         for version, ids in versions.items():
             pid = "group_" + hashlib.sha256((summary + "\x1f" + version).encode()).hexdigest()[:20]
             result["products"].append({"id": pid, "brand": brand, "model": model, "version": version,
@@ -263,13 +297,13 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
                 # Never key quantities by a normalized label and overwrite one.
                 model_rows[(row["month"], row["metric"])].append(row)
         for (month, metric), rows in model_rows.items():
-            known = {generation_model_key(row["generation"]) if row.get("generation") else _product_model_key(row)
-                     for row in rows if row.get("value") is not None}
+            known = {generation for row in rows if row.get("value") is not None
+                     for generation in _declared_generations(row)}
             result["model_sales"].append({"brand": brand, "model": model, "generation": summary,
                 "month": month, "metric": metric, "value": _sum_known(row.get("value") for row in rows), "derived": True,
-                "known_generations": sum(generation_model_key(member) in known for member in members),
+                "known_generations": sum(normalize_generation(member) in known for member in members),
                 "total_generations": len(members)})
-            if any(generation_model_key(member) not in known for member in members) or any(row.get("value") is None for row in rows):
+            if any(normalize_generation(member) not in known for member in members) or any(row.get("value") is None for row in rows):
                 warnings.append(f"{summary} {month} 锁单仅含已知单代际，仍有缺项。")
     # Reference drilldowns follow the same scope and cannot reintroduce members.
     for field in ("reference", "version_reference"):

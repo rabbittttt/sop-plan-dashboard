@@ -13,7 +13,8 @@ from pathlib import Path
 
 from sop_brand import brand_order_key
 from sop_source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
-                              normalize_generation, _generations as source_generations)
+                              normalize_generation, product_display_model, catalog_model_input,
+                              _generations as source_generations)
 
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -369,6 +370,12 @@ class SOPStore:
             raise ValidationError(str(error)) from error
         result["products"] = sorted(result["products"], key=lambda p: (brand_order_key(p.get("brand", "")),
                                     p.get("model", ""), p.get("version", ""), p["id"]))
+        visible_names = {}
+        for product in result["products"]:
+            name = catalog_name_key(product)
+            visible_names[name] = visible_names.get(name, 0) + 1
+        for product in result["products"]:
+            product["name_conflict"] = visible_names[catalog_name_key(product)] > 1
         result["generation_view"] = {"mode": mode, "rule_signature": rules["signature"],
             "signature": mode + ":" + rules["signature"], "config_path": rules["config_path"],
             "warnings": warnings, "derived": mode == "summary"}
@@ -556,18 +563,20 @@ class SOPStore:
     def _auto_source_bindings(self, data, existing, aliases):
         incoming = {}
         known_summaries = self._known_summary_names()
+        def binding_key(product):
+            return catalog_name_key({**product, "model": product_display_model(product)})
         def summary_only(product):
             generations = source_generations(product)
             return bool(generations) and all(normalize_generation(g) in known_summaries for g in generations)
         for product in data["products"]:
             if summary_only(product):
                 continue
-            incoming.setdefault(catalog_name_key(product), []).append(product)
+            incoming.setdefault(binding_key(product), []).append(product)
         known = {}
         for product in self._catalog_items():
             if summary_only(product):
                 continue
-            known.setdefault(catalog_name_key(product), []).append(product)
+            known.setdefault(binding_key(product), []).append(product)
         bindings = {}
         for key, sources in incoming.items():
             matches = known.get(key, [])
@@ -637,6 +646,12 @@ class SOPStore:
                                 value = display_version(value, "")
                             if not value:
                                 raise ValidationError(f"请填写{label}。")
+                            if field == "model" and before:
+                                # Visible source year annotations are not a
+                                # rename when another catalog field is saved.
+                                if value in {prior.get("model"), product_display_model(prior)}:
+                                    continue
+                                value = catalog_model_input(value, prior)
                             if value != prior.get(field) or not before:
                                 overrides[field] = value
                     active = change.get("active", prior.get("active", True))
@@ -848,6 +863,10 @@ class SOPStore:
                     requested = text_field(requested, label, 200)
                     if field == "version":
                         original, requested = display_version(original, ""), display_version(requested, "")
+                    elif field == "model":
+                        original = catalog_model_input(original, prior)
+                        requested = catalog_model_input(requested, prior)
+                        database = catalog_model_input(database, prior)
                     if not original or not requested:
                         raise ValidationError(f"请完整填写{label}；减少版本请删除整条明细行。")
                 if requested == original or requested == database:

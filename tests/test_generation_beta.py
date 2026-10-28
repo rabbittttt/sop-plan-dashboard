@@ -30,12 +30,13 @@ class GenerationBetaTest(unittest.TestCase):
     def test_detail_merges_beta_model_display_without_rekeying_editable_products(self):
         products = [{"id": "normal", "brand": "尊界", "model": "V800", "generation": "尊界 V800 2026款", "version": "Max"},
                     {"id": "beta", "brand": "尊界", "model": "V800 BETA", "generation": "尊界 V800 BETA 2026款", "version": "Max"},
+                    {"id": "old", "brand": "尊界", "model": "V800", "generation": "尊界 V800 2025款", "version": "Max"},
                     {"id": "other", "brand": "尊界", "model": "BETAMAX", "generation": "尊界 BETAMAX 2026款", "version": "Max"}]
         data = self.source(products)
         before = copy.deepcopy(data)
         detail, _ = project_generation_sources(data, "detail", self.rules())
         self.assertEqual({p["id"]: p["model"] for p in detail["products"]},
-                         {"normal": "V800", "beta": "V800", "other": "BETAMAX"})
+                         {"normal": "V800 2026款", "beta": "V800 2026款", "old": "V800 2025款", "other": "BETAMAX 2026款"})
         self.assertFalse(any(p.get("read_only") for p in detail["products"]))
         self.assertEqual(detail["sales"], data["sales"])
         self.assertEqual({p["id"]: p["generation"] for p in detail["products"]},
@@ -46,11 +47,11 @@ class GenerationBetaTest(unittest.TestCase):
         products = [{"id": "a", "brand": "享界", "model": "S9", "generation": "享界 S9 2026款", "version": "Max"},
                     {"id": "beta", "brand": "享界", "model": "S9 BETA", "generation": "享界 S9 BETA 2026款", "version": "Max"},
                     {"id": "t", "brand": "享界", "model": "S9T", "generation": "享界 S9T 2026款", "version": "Max"},
-                    {"id": "manual", "brand": "享界", "model": "S9", "version": "手工新版本"},
+                    {"id": "manual", "brand": "享界", "model": "S9 2026款", "version": "手工新版本"},
                     {"id": "raw", "brand": "享界", "model": "X4 BETA", "generation": "享界 X4 BETA 2026款汇总", "version": "Max"}]
         data = self.source(products)
         summary, warnings = project_generation_sources(data, "summary", self.rules())
-        self.assertEqual({p["model"] for p in summary["products"]}, {"X4"})
+        self.assertEqual({p["model"] for p in summary["products"]}, {"X4 2026款"})
         self.assertEqual({pid for p in summary["products"] for pid in p["member_product_ids"]}, {"a", "beta", "t", "manual"})
         self.assertTrue(all(p["read_only"] for p in summary["products"]))
         self.assertEqual(sum(r["value"] for r in summary["sales"]), 10)
@@ -62,34 +63,36 @@ class GenerationBetaTest(unittest.TestCase):
         self.assertEqual(alternate["products"], summary["products"])
         self.assertEqual(alternate["model_sales"], summary["model_sales"])
 
-    def test_variants_and_other_years_follow_live_model_group(self):
+    def test_variants_follow_live_rules_without_including_other_years(self):
         products = [{"id": "beta", "brand": "享界", "model": "S9（beta）", "generation": "享界\u3000S9（beta） 2026款", "version": "Max"},
                     {"id": "old", "brand": "享界", "model": "S9", "generation": "享界 S9 2025款", "version": "Max"}]
         data = self.source(products)
         self.groups = {"享界 X4 2026款汇总": ["享界 S9 2026款"]}
         first, _ = project_generation_sources(data, "summary", self.rules())
         group = next(p for p in first["products"] if p.get("read_only"))
-        self.assertEqual(set(group["member_product_ids"]), {"beta", "old"})
-        self.assertNotIn("old", {p["id"] for p in first["products"]})
+        self.assertEqual(group["member_product_ids"], ["beta"])
+        self.assertEqual(next(p["model"] for p in first["products"] if p["id"] == "old"), "S9 2025款")
         self.groups = {"享界 NEW 2026款汇总": ["享界 S9 2025款"]}
         second, _ = project_generation_sources(data, "summary", self.rules())
         group = next(p for p in second["products"] if p.get("read_only"))
-        self.assertEqual(group["model"], "NEW")
-        self.assertEqual(set(group["member_product_ids"]), {"beta", "old"})
+        self.assertEqual(group["model"], "NEW 2026款")
+        self.assertEqual(group["member_product_ids"], ["old"])
         self.assertEqual(sum(r["value"] for r in second["model_sales"]), 30)
 
-    def test_explicit_year_rules_win_and_ambiguous_other_year_is_rejected(self):
+    def test_unlisted_years_and_unknown_year_manual_rows_remain_independent(self):
         self.groups = {"享界 Old 2025款汇总": ["享界 S9 2025款"],
                        "享界 New 2026款汇总": ["享界 S9 2026款"]}
         data = self.source([{"id": "p", "brand": "享界", "model": "S9", "generation": "享界 S9 2025款", "version": "Max"}])
         result, _ = project_generation_sources(data, "summary", self.rules())
-        self.assertEqual({p["model"] for p in result["products"]}, {"Old"})
+        self.assertEqual({p["model"] for p in result["products"]}, {"Old 2025款"})
         data["products"][0]["generation"] = "享界 S9 2024款"
         data["model_sales"][0]["generation"] = "享界 S9 2024款"
-        with self.assertRaises(MergeRuleError):
-            project_generation_sources(data, "summary", self.rules())
+        data["products"].append({"id": "manual", "brand": "享界", "model": "S9", "version": "手工新版本"})
+        result, _ = project_generation_sources(data, "summary", self.rules())
+        self.assertEqual({p["model"] for p in result["products"]}, {"S9 2024款", "S9"})
+        self.assertFalse(any(p.get("read_only") for p in result["products"]))
 
-    def test_supplied_41_generation_examples_never_leave_members_beside_summary(self):
+    def test_supplied_41_generation_examples_keep_each_unlisted_year_separate(self):
         # User examples are regression fixtures, never a runtime model catalog.
         names = """问界 F2N 2026款汇总
 问界 M5 2023款 纯电智驾版
@@ -145,14 +148,14 @@ class GenerationBetaTest(unittest.TestCase):
         detail, _ = project_generation_sources(data, "detail", rules)
         result, _ = project_generation_sources(data, "summary", rules)
         models = {(p["brand"], p["model"]) for p in result["products"]}
-        self.assertEqual(models, {("问界", m) for m in ["F2N", "M5", "M6", "M7", "M8"]}
-                         | {("智界", m) for m in ["R7", "RX", "S7", "V9"]}
-                         | {("享界", m) for m in ["G9", "X4", "V8"]}
-                         | {("尊界", m) for m in ["S800", "S800 典藏大观", "X6M"]}
-                         | {("尚界", m) for m in ["H5", "SHB"]})
+        self.assertEqual(models, {("问界", m) for m in ["F2N 2026款", "M5 2023款 纯电智驾版", "M5 2024款", "M5 2025款", "M6 2026款", "M7 2024款", "M7 2026款", "M8 2025款", "M9 2024款", "M9 2025款"]}
+                         | {("智界", m) for m in ["R7 2024款", "R7 2025款", "R7 2026款", "R7 2027款", "RX 2027款", "S7 2024款", "S7 2025款", "S7 2026款", "V9 2026款"]}
+                         | {("享界", m) for m in ["G9 2027款", "X4 2026款", "V8 2027款", "S9 2024款", "S9 2025款"]}
+                         | {("尊界", m) for m in ["S800 2025款", "S800 典藏大观 2026款", "X6M 2026款"]}
+                         | {("尚界", m) for m in ["H5 2026款", "H5 2027款", "SHB 2026款", "Z7 2025款", "Z7T 2025款"]})
         for field in ("sales", "model_sales"):
             self.assertEqual(sum(r["value"] for r in result[field]), sum(r["value"] for r in detail[field]))
-        expected_members = {"X4": 4, "X6M": 3, "SHB": 4, "F2N": 4}
+        expected_members = {"X4 2026款": 2, "X6M 2026款": 3, "SHB 2026款": 2, "F2N 2026款": 2}
         self.assertEqual({p["model"]: len(p["member_product_ids"]) for p in result["products"] if p.get("read_only")}, expected_members)
         self.assertEqual(generation_model_key("尚界 Z7 2025款Beta"), ("尚界", "Z7"))
 

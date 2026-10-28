@@ -286,6 +286,7 @@ function bindProductSource(id) {
 }
 async function saveCatalog(changes,newOwner) {
   if(changes.some(change=>state.products.find(p=>p.id===change.id)?.read_only))throw new Error('汇总代际只读，请切换至单代际维护');
+  changes=changes.map(change=>{const p=state.products.find(p=>p.id===change.id);return p&&change.model===p.model?{...change,model:catalogModel(p)}:change;});
   const result=await api('/api/products',{changes,owner:newOwner});
   owner=newOwner;localStorage.setItem('sop-owner',owner);
   closeDialog();brand='';model='';query='';
@@ -294,11 +295,12 @@ async function saveCatalog(changes,newOwner) {
   const sync=result.workbook_sync;
   toast(sync&&sync.status!=='synced'?`目录已保存；${sync.message}`:'目录与计划表已更新',sync?.status==='error'||sync?.status==='conflict');
 }
+function catalogModel(p) { return p.catalog_model??p.model; }
 function editProduct(id='') {
   const p=state.products.find(x=>x.id===id)||{brand:brand||'',model:model||'',version:'',active:true,start_month:state.current_month};
   if(p.read_only)return toast('汇总代际只读，请切换至单代际维护',true);
   const knownBrands=[...new Set([...brands,...state.products.map(x=>x.brand)])];
-  openDialog(`<form id="catalog-form"><h2>${id?'维护版本':'新增版本'}</h2><p class="subtitle">${id?'改名沿用原记录，已填计划及历史不丢失。':'已有车型下增加版本，或填写新车型名称提前安排计划。'}</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><div class="form-grid"><label class="field">品牌<input id="catalog-brand" list="catalog-brands" value="${esc(p.brand)}" required maxlength="100"><datalist id="catalog-brands">${knownBrands.map(b=>`<option value="${esc(b)}">`).join('')}</datalist></label><label class="field">车型<input id="catalog-model" list="catalog-models" value="${esc(p.model)}" required maxlength="100"><datalist id="catalog-models">${[...new Set(state.products.map(x=>x.model))].map(m=>`<option value="${esc(m)}">`).join('')}</datalist></label><label class="field full">版本名称<input id="catalog-version" value="${esc(p.version)}" placeholder="如 Max 增程版，无需填写2026款" required maxlength="200"></label><label class="field">开始计划月份<input id="catalog-start" type="month" value="${esc(p.start_month&&p.start_month!=='1900-01'?p.start_month:'')}"></label><label class="field">结束计划月份（可留空）<input id="catalog-end" type="month" value="${esc(p.end_month||'')}"></label><label class="field">状态<select id="catalog-active">${opt('active','使用中',p.active===false?'inactive':'active')}${opt('inactive','已停用',p.active===false?'inactive':'active')}</select></label><label class="field">维护人<input id="catalog-owner" value="${esc(owner)}" required maxlength="100"></label></div>${id?`<p class="form-help">来源：${esc(p.source_generation||p.generation||'手工建立')}。只改显示名，不改变销量来源对应关系。整车所有版本一起改名，请使用“车型改名”。</p>`:''}<p class="form-help">停用后保留已有计划，不自动清空未来数量；历史月份仍可修正。不同产品请使用不同版本名称。</p><div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary">保存并更新模板</button></div></form>`);
+  openDialog(`<form id="catalog-form"><h2>${id?'维护版本':'新增版本'}</h2><p class="subtitle">${id?'改名沿用原记录，已填计划及历史不丢失。':'已有车型下增加版本，或填写新车型名称提前安排计划。'}</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><div class="form-grid"><label class="field">品牌<input id="catalog-brand" list="catalog-brands" value="${esc(p.brand)}" required maxlength="100"><datalist id="catalog-brands">${knownBrands.map(b=>`<option value="${esc(b)}">`).join('')}</datalist></label><label class="field">车型<input id="catalog-model" list="catalog-models" value="${esc(id?catalogModel(p):p.model)}" required maxlength="100"><datalist id="catalog-models">${[...new Set(state.products.map(x=>id?catalogModel(x):x.model))].map(m=>`<option value="${esc(m)}">`).join('')}</datalist></label><label class="field full">版本名称<input id="catalog-version" value="${esc(p.version)}" placeholder="如 Max 增程版，无需填写2026款" required maxlength="200"></label><label class="field">开始计划月份<input id="catalog-start" type="month" value="${esc(p.start_month&&p.start_month!=='1900-01'?p.start_month:'')}"></label><label class="field">结束计划月份（可留空）<input id="catalog-end" type="month" value="${esc(p.end_month||'')}"></label><label class="field">状态<select id="catalog-active">${opt('active','使用中',p.active===false?'inactive':'active')}${opt('inactive','已停用',p.active===false?'inactive':'active')}</select></label><label class="field">维护人<input id="catalog-owner" value="${esc(owner)}" required maxlength="100"></label></div>${id?`<p class="form-help">来源：${esc(p.source_generation||p.generation||'手工建立')}。只改显示名，不改变销量来源对应关系。整车所有版本一起改名，请使用“车型改名”。</p>`:''}<p class="form-help">停用后保留已有计划，不自动清空未来数量；历史月份仍可修正。不同产品请使用不同版本名称。</p><div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary">保存并更新模板</button></div></form>`);
   $('#catalog-active').onchange=()=>{if($('#catalog-active').value==='active'&&p.active===false)$('#catalog-end').value='';};
   $('#catalog-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{
     const change={...(id?{id,revision:p.revision||0}:{}),brand:$('#catalog-brand').value.trim(),model:$('#catalog-model').value.trim(),version:$('#catalog-version').value.trim(),active:$('#catalog-active').value==='active',start_month:$('#catalog-start').value||null,end_month:$('#catalog-end').value||null};
@@ -310,11 +312,12 @@ function renameModel() {
   const groups=[...new Set(state.products.filter(p=>!p.read_only).map(p=>`${p.brand}\t${p.model}`))];
   if(!groups.length)return editProduct();
   openDialog(`<form id="rename-model-form"><h2>车型改名</h2><p class="subtitle">将该车型下所有版本一起改名，保留原计划与销量关联。</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><div class="form-grid"><label class="field full">当前车型<select id="rename-from">${groups.map(g=>opt(g,g.replace('\t',' · '),`${brand}\t${model}`)).join('')}</select></label><label class="field">新车型名称<input id="rename-to" required maxlength="100"></label><label class="field">维护人<input id="rename-owner" value="${esc(owner)}" required maxlength="100"></label></div><div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary">保存并更新模板</button></div></form>`);
-  $('#rename-to').value=$('#rename-from').value.split('\t')[1];
-  $('#rename-from').onchange=()=>{$('#rename-to').value=$('#rename-from').value.split('\t')[1];};
+  const selectedProducts=()=>{const [b,m]=$('#rename-from').value.split('\t');return state.products.filter(p=>!p.read_only&&p.brand===b&&p.model===m);};
+  const refill=()=>{$('#rename-to').value=catalogModel(selectedProducts()[0]);};
+  refill();$('#rename-from').onchange=refill;
   $('#rename-model-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{
-    const [b,m]=$('#rename-from').value.split('\t'),newModel=$('#rename-to').value.trim();
-    const changes=state.products.filter(p=>!p.read_only&&p.brand===b&&p.model===m).map(p=>({id:p.id,revision:p.revision||0,brand:p.brand,model:newModel,version:p.version,active:p.active!==false}));
+    const ps=selectedProducts(),newModel=$('#rename-to').value.trim(),unchanged=newModel===catalogModel(ps[0]);
+    const changes=ps.map(p=>({id:p.id,revision:p.revision||0,brand:p.brand,model:unchanged?catalogModel(p):newModel,version:p.version,active:p.active!==false}));
     await saveCatalog(changes,$('#rename-owner').value.trim());
   }catch(err){productFormError(err);save.disabled=false;}};
 }

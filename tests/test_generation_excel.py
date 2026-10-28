@@ -66,12 +66,13 @@ class GenerationExcelTest(unittest.TestCase):
         return service, path, body
 
     def beta_members(self):
-        """Older years, model-only manual rows and BETA share one display group."""
+        """Keep model years separate and merge BETA only with its own year."""
         self.config.write_text("MERGE_GROUPS = {'享界 X4 2026款汇总': ['享界 S9 2026款', '享界 S9T 2026款']}\n", encoding="utf-8")
         products = [
             {"id": pid, "brand": "享界", "model": model, "version": "Max", "generation": generation}
             for pid, model, generation in [
                 ("s9", "S9", "享界 S9 2024款"),
+                ("s9-new", "S9", "享界 S9 2026款"),
                 ("s9-beta", "S9 BETA", "享界 S9 BETA 2026款"),
                 ("s9t", "S9T", "享界 S9T 2026款"),
                 ("raw-x4", "X4", "享界 X4 2026款汇总")]]
@@ -81,28 +82,37 @@ class GenerationExcelTest(unittest.TestCase):
         self.addCleanup(self.store.close)
         manual = self.store.save_products({"changes": [{"brand": "享界", "model": "S9", "version": "手工配置"}]})["items"][0]
         self.manual_id = manual["id"]
+        dated = self.store.save_products({"changes": [{"brand": "享界", "model": "S9 2026款", "version": "手工年款配置"}]})["items"][0]
+        self.dated_manual_id = dated["id"]
         self.store.save_plans({"owner": "test", "changes": [
             {"product_id": pid, "month": "2026-10", "sop": value, "forecast": None, "revision": 0}
-            for pid, value in [("s9", 10), ("s9-beta", 4), ("s9t", 20), (self.manual_id, 6)]]})
+            for pid, value in [("s9", 10), ("s9-new", 2), ("s9-beta", 4), ("s9t", 20),
+                               (self.manual_id, 6), (self.dated_manual_id, 3)]]})
         self.path = self.root / "beta-maintenance.xlsx"
         self.sync = WorkbookSync(self.store, self.path, writer=write_plan_workbook)
 
-    def test_beta_detail_maintenance_keeps_editable_ids_and_merged_model_labels(self):
+    def test_beta_detail_maintenance_separates_years_and_merges_same_year_labels(self):
         self.beta_members()
         self.assertEqual(self.sync.sync()["status"], "synced")
         spec = self.spec()
         by_id = {p["id"]: p for p in spec["products"]}
-        self.assertEqual(set(by_id), {"s9", "s9-beta", "s9t", self.manual_id})
+        self.assertEqual(set(by_id), {"s9", "s9-new", "s9-beta", "s9t", self.manual_id, self.dated_manual_id})
         self.assertEqual(by_id["s9"]["source_generation"], "享界 S9 2024款")
-        self.assertEqual(by_id["s9-beta"]["model"], "S9")
+        self.assertEqual(by_id["s9"]["model"], "S9 2024款")
+        self.assertEqual(by_id["s9-new"]["model"], "S9 2026款")
+        self.assertEqual(by_id["s9-beta"]["model"], "S9 2026款")
+        self.assertEqual(by_id[self.manual_id]["model"], "S9")
+        self.assertEqual(by_id[self.dated_manual_id]["model"], "S9 2026款")
         self.assertEqual(by_id["s9-beta"]["source_generation"], "享界 S9 BETA 2026款")
         self.assertFalse(by_id["s9-beta"].get("read_only"))
         rows = {r["product_id"]: r["row"] for r in spec["rows"] if r["kind"] == "product"}
-        block = [rows[pid] for pid in ("s9", "s9-beta", self.manual_id)]
+        block = [rows[pid] for pid in ("s9-new", "s9-beta", self.dated_manual_id)]
         book = openpyxl.load_workbook(self.path)
         sheet = book["SOP计划"]
-        for letter in ("A", "B"):
-            self.assertIn(f"{letter}{min(block)}:{letter}{max(block)}", set(map(str, sheet.merged_cells.ranges)))
+        self.assertIn(f"B{min(block)}:B{max(block)}", set(map(str, sheet.merged_cells.ranges)))
+        self.assertEqual(sheet.cell(rows["s9"], 2).value, "S9 2024款")
+        self.assertEqual(sheet.cell(min(block), 2).value, "S9 2026款")
+        self.assertNotIn(rows["s9"], range(min(block), max(block) + 1))
         for pid, row in rows.items():
             self.assertEqual(sheet.cell(row, spec["product_column"]).value, pid)
         self.assertFalse(sheet[f"M{rows['s9-beta']}"].protection.locked)
@@ -113,11 +123,27 @@ class GenerationExcelTest(unittest.TestCase):
         original = next(p for p in self.store.read_sales(include_excluded=True)["products"] if p["id"] == "s9-beta")
         self.assertEqual(original["model"], "S9 BETA")
         self.assertEqual(original["source_generation"], "享界 S9 BETA 2026款")
-        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 4)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 6)
 
-    def test_beta_and_manual_members_export_only_x4_and_old_detail_import_recalculates(self):
+    def test_year_label_is_a_valid_catalog_edit_baseline(self):
         self.beta_members()
-        old_service, old_path, _ = self.download("beta-detail")
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        spec = self.spec()
+        row = next(r["row"] for r in spec["rows"] if r.get("product_id") == "s9")
+        edit_cell(self.path, f"B{row}", "S9 Classic 2024款")
+        result = self.sync.sync()
+        self.assertEqual(result["status"], "synced", result)
+        renamed = next(p for p in self.store.read_sales()["products"] if p["id"] == "s9")
+        self.assertEqual(renamed["model"], "S9 Classic 2024款")
+        self.assertEqual(renamed["source_generation"], "享界 S9 2024款")
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='s9'").fetchone()[0], 10)
+
+    def test_summary_exports_configured_year_only_and_old_detail_import_recalculates(self):
+        self.beta_members()
+        # The prior release exported model labels without a year. Its trusted
+        # row identities must remain importable after year-specific display.
+        with patch("sop_source_rules._display_labels", side_effect=lambda data: data):
+            old_service, old_path, _ = self.download("beta-detail")
         book = openpyxl.load_workbook(old_path)
         old_spec = fixtures.manifest(book)
         rows = {r["product_id"]: r["row"] for r in old_spec["rows"]
@@ -125,41 +151,46 @@ class GenerationExcelTest(unittest.TestCase):
         book.close()
         self.summary()
         summary = self.store.state()
-        self.assertEqual({p["model"] for p in summary["products"]}, {"X4"})
-        self.assertEqual({pid for p in summary["products"] for pid in p["member_product_ids"]},
-                         {"s9", "s9-beta", "s9t", self.manual_id})
-        self.assertTrue(all(p.get("read_only") for p in summary["products"]))
-        self.assertEqual(sum(p["sop"] for p in summary["plans"]), 40)
+        self.assertEqual({p["model"] for p in summary["products"]}, {"X4 2026款", "S9 2024款", "S9"})
+        aggregate_ids = {p["id"] for p in summary["products"] if p.get("read_only")}
+        self.assertEqual({pid for p in summary["products"] if p.get("read_only") for pid in p["member_product_ids"]},
+                         {"s9-new", "s9-beta", "s9t", self.dated_manual_id})
+        self.assertEqual({p["id"] for p in summary["products"] if not p.get("read_only")}, {"s9", self.manual_id})
+        self.assertEqual(sum(p["sop"] for p in summary["plans"] if p["product_id"] in aggregate_ids), 29)
+        self.assertEqual(sum(p["sop"] for p in summary["plans"]), 45)
         self.assertEqual(self.sync.sync()["status"], "synced")
-        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"X4"})
+        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"X4 2026款", "S9 2024款", "S9"})
         service, path, _ = self.download("beta-summary")
         book = openpyxl.load_workbook(path)
         spec = fixtures.manifest(book)
-        self.assertEqual({p["model"] for p in spec["products"]}, {"X4"})
+        self.assertEqual({p["model"] for p in spec["products"]}, {"X4 2026款", "S9 2024款", "S9"})
         plan_rows = [r for r in spec["rows"] if r["kind"] == "product" and r.get("metric") == "SOP计划量"]
-        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 4).value for r in plan_rows), 40)
+        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 4).value for r in plan_rows), 45)
         for row in plan_rows:
-            self.assertTrue(book["SOP计划"].cell(row["row"], 4).protection.locked)
+            self.assertEqual(book["SOP计划"].cell(row["row"], 4).protection.locked,
+                             row["product_id"] in aggregate_ids)
             self.assertEqual(book["SOP计划"].cell(row["row"], spec["product_column"]).value, row["product_id"])
         book.close()
         self.assertEqual(service.import_content(path.read_bytes())["imported"], 0)
         edit_cell(old_path, f"D{rows['s9-beta']}", 9)
+        edit_cell(old_path, f"D{rows['s9']}", 12)
         edit_cell(old_path, f"D{rows[self.manual_id]}", 7)
         result = old_service.import_content(old_path.read_bytes())
-        self.assertEqual(result["imported"], 2)
+        self.assertEqual(result["imported"], 3)
         self.assertEqual(result["created"], 0)
         self.assertEqual(result["catalog_updated"], 0)
-        self.assertEqual(sum(p["sop"] for p in self.store.view_plans()), 46)
+        self.assertEqual(sum(p["sop"] for p in self.store.view_plans()), 53)
+        self.assertEqual(sum(p["sop"] for p in self.store.view_plans() if p["product_id"] in aggregate_ids), 34)
         original = next(p for p in self.store.read_sales(include_excluded=True)["products"] if p["id"] == "s9")
         self.assertEqual(original["source_generation"], "享界 S9 2024款")
-        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='s9'").fetchone()[0], 10)
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='s9'").fetchone()[0], 12)
         self.assertEqual(self.sync.sync()["status"], "synced")
         spec = self.spec()
         book = openpyxl.load_workbook(self.path, data_only=True)
         self.assertEqual(sum(book["SOP计划"].cell(r["row"], 13).value
-                             for r in spec["rows"] if r["kind"] == "product"), 46)
+                             for r in spec["rows"] if r["kind"] == "product"), 53)
         book.close()
-        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 4)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 6)
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans WHERE product_id LIKE 'group_%'").fetchone()[0], 0)
 
     def test_maintenance_switches_views_preserving_pending_detail_edits(self):
@@ -231,7 +262,7 @@ class GenerationExcelTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "规则或展示模式已变化"):
             PlanRoundtrip(self.store).prepare(body)
         self.assertEqual(self.sync.sync()["status"], "synced")
-        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"Combo", "B", "C"})
+        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"Combo 2026款", "B 2026款", "C 2026款"})
 
     @unittest.skipUnless(fixtures.NODE.is_file(), "Bundled spreadsheet runtime unavailable")
     def test_node_writer_keeps_aggregate_cells_readonly_and_roundtrippable(self):

@@ -93,7 +93,7 @@ class SummaryCatalogTest(unittest.TestCase):
 
     def test_summary_source_does_not_claim_a_matching_manual_identity(self):
         created = self.store.save_products({"owner": "test", "changes": [
-            {"brand": "智界", "model": "S10", "version": "Max", "active": True}]})["items"][0]
+            {"brand": "智界", "model": "S10 2026款", "version": "Max", "active": True}]})["items"][0]
         summary = {"id": "new-summary", "brand": "智界", "model": "S10", "version": "Max",
                    "generation": "智界 S10 2026款汇总"}
         data = {**self.data, "products": [*PRODUCTS, summary]}

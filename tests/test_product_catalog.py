@@ -67,9 +67,10 @@ class ProductCatalogTest(unittest.TestCase):
         self.write_source()
         products = self.store.record_sales()["products"]
         self.assertEqual(len(products), 2)
-        self.assertTrue(all(p["name_conflict"] for p in products))
+        self.assertFalse(any(p["name_conflict"] for p in products))
         self.assertEqual(self.product()["version"], "Max首代")
-        self.assertEqual(self.product()["model"], "新M5")
+        self.assertEqual(self.product()["model"], "新M5 2026款")
+        self.assertEqual(self.product()["catalog_model"], "新M5")
         self.assertTrue(self.product()["source_present"])
         self.assertEqual({p["id"] for p in products}, {"stable-2026", "stable-2027"})
 
