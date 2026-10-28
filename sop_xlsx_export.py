@@ -296,7 +296,6 @@ def write_export_workbook(payload: dict) -> None:
     validation.showInputMessage = True
     validation.promptTitle = "SOP计划量（辆）"
     validation.prompt = "只填非负整数。空白表示未填写，0表示明确不安排。"
-    sheet.add_data_validation(validation)
     caches = {}
     context = data.get("roundtrip", {})
     for row in layout["rows"]:
@@ -341,6 +340,10 @@ def write_export_workbook(payload: dict) -> None:
             if data["include_versions"] and row["kind"] == "product" and row["metric"] == "SOP计划量":
                 for column in range(1, 4):
                     sheet.cell(number, column).protection = Protection(locked=False)
+    # An empty dataValidations container is invalid SpreadsheetML. Summary
+    # downloads and versions with no editable months must omit it entirely.
+    if validation.sqref:
+        sheet.add_data_validation(validation)
     for reference in layout["merges"]:
         sheet.merge_cells(reference)
     sheet.freeze_panes = f"{_column(layout['first_value'])}5"

@@ -113,7 +113,6 @@ def write_plan_workbook(payload: dict) -> None:
         validation.prompt = "只填非负整数。空白表示未填写，0表示明确不安排。"
         validation.errorTitle = "请输入非负整数"
         validation.error = "SOP计划量须为非负整数；未填写时请留空。"
-        sheet.add_data_validation(validation)
 
         for item in spec["rows"]:
             row = item["row"]
@@ -147,6 +146,9 @@ def write_plan_workbook(payload: dict) -> None:
             if item.get("hidden"):
                 sheet.row_dimensions[row].hidden = True
 
+        # Omit the validation container when no plan cells are editable.
+        if validation.sqref:
+            sheet.add_data_validation(validation)
         for address, formula in spec["formulas"].items():
             sheet[address] = formula
         for reference in spec["merges"]:

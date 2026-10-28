@@ -34,4 +34,10 @@
 python -m unittest discover -s tests -v
 ```
 
+本机已安装 Microsoft Excel 时，可用原生只读打开检查生成文件。此检查使用正常打开方式，遇到需要修复的文件会失败，并核对标题合并、列宽及隐藏列：
+
+```powershell
+./tests/verify_excel_native.ps1 -Paths ./tests/artifacts/inline-layout/export.xlsx
+```
+
 详细的业务口径、表格维护、导入导出和快照规则见[业务规则与使用说明](docs/业务规则与使用说明.md)。

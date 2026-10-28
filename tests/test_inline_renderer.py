@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
@@ -155,6 +156,24 @@ class InlineRendererTest(unittest.TestCase):
             self.assertTrue(sheet.column_dimensions[letter].hidden)
             self.assertEqual(sheet.column_dimensions[letter].width, 0)
         self.assertTrue(all(r["kind"] != "manual_entry" for r in manifest(wb)["rows"]))
+
+    def test_hidden_flag_is_standard_boolean_without_modern_checkbox_extensions(self):
+        for path, versions in ((self.export, True), (self.partial, True), (self.report, False)):
+            with self.subTest(path=path.name):
+                workbook = openpyxl.load_workbook(path)
+                try:
+                    flag = workbook["_sop_import"]["B3"]
+                    self.assertEqual(flag.data_type, "b")
+                    self.assertIs(flag.value, versions)
+                finally:
+                    workbook.close()
+                with zipfile.ZipFile(path) as archive:
+                    self.assertFalse(any("featurepropertybag" in name.lower()
+                                         for name in archive.namelist()))
+                    for name in ("xl/styles.xml", "xl/_rels/workbook.xml.rels", "[Content_Types].xml"):
+                        xml = archive.read(name).lower()
+                        self.assertNotIn(b"featurepropertybag", xml, name)
+                        self.assertNotIn(b"xfcomplement", xml, name)
 
     def test_legacy_parity_reader_selects_new_contract_after_upgrade(self):
         from tests import test_export_workbook as legacy

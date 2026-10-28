@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -170,6 +172,25 @@ class OfflineExportTest(unittest.TestCase):
             self.assertEqual(book["_sop_import"]["B3"].value, False)
         finally:
             book.close()
+
+    def test_downloads_without_editable_cells_omit_empty_validation_xml(self):
+        from sop_xlsx_export import write_export_workbook
+        from tests.test_inline_renderer import export_payload
+
+        for locks, versions in ((False, False), (True, False), (False, True)):
+            with self.subTest(locks=locks, versions=versions):
+                payload = export_payload(locks=locks, versions=versions)
+                if versions:
+                    payload["roundtrip"]["editable_months_by_product"] = {
+                        product["id"]: [] for product in payload["roundtrip"]["products"]}
+                write_export_workbook({**payload, "output_path": str(self.path)})
+                with zipfile.ZipFile(self.path) as archive:
+                    sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+                ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+                self.assertIsNone(sheet.find("m:dataValidations", ns))
+                self.assertIsNotNone(sheet.find("m:mergeCells", ns))
+                self.assertTrue(any(col.attrib.get("hidden") == "1"
+                                    for col in sheet.findall("m:cols/m:col", ns)))
 
     def test_external_names_are_literal_text_not_excel_formulas(self):
         current = next(p for p in self.store.list_products()["items"] if p["id"] == "a")

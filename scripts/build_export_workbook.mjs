@@ -271,11 +271,13 @@ async function main() {
         plan_revisions_by_product:data.roundtrip.plan_revisions_by_product??{}};
       const chars=Array.from(JSON.stringify(manifest)),chunks=[];
       for(let i=0;i<chars.length;i+=14000)chunks.push(chars.slice(i,i+14000).join(''));
-      const rows=[['SOP_IMPORT',2],['token',data.roundtrip.token],['include_versions',data.include_versions],['sheet',sheet.name],['manifest_json',null],...chunks.map((chunk,i)=>[i+1,chunk])];
+      // Numeric staging avoids a modern checkbox control for this hidden flag.
+      // The finalizer restores the standard XLSX boolean type used by import.
+      const rows=[['SOP_IMPORT',2],['token',data.roundtrip.token],['include_versions',Number(data.include_versions)],['sheet',sheet.name],['manifest_json',null],...chunks.map((chunk,i)=>[i+1,chunk])];
       metadata.getRange('A1:B'+rows.length).setNumberFormat('@');
       writeTo(metadata,1,1,rows);
     } else {
-      const rows=[['SOP_IMPORT',1,null,null,null],['token',data.roundtrip.token,null,null,null],['include_versions',data.include_versions,null,null,null],['sheet',sheet.name,null,null,null],['kind','product_id','month','cell','baseline_sop'],...mapping];
+      const rows=[['SOP_IMPORT',1,null,null,null],['token',data.roundtrip.token,null,null,null],['include_versions',Number(data.include_versions),null,null,null],['sheet',sheet.name,null,null,null],['kind','product_id','month','cell','baseline_sop'],...mapping];
       metadata.getRange('A1:D'+rows.length).setNumberFormat('@');
       writeTo(metadata,1,1,rows);
     }
@@ -307,6 +309,12 @@ for index,s in enumerate(book.find('m:sheets',ns),1):
         cell.set('t','inlineStr')
         for child in list(cell): cell.remove(child)
         ET.SubElement(ET.SubElement(cell,tag('is')),tag('t')).text=text
+    if s.attrib['name']=='_sop_import':
+        cell=cells.get('B3')
+        if cell is None: raise ValueError('Missing exported version flag')
+        cell.set('t','b')
+        for child in list(cell): cell.remove(child)
+        ET.SubElement(cell,tag('v')).text='1' if config['include_versions'] else '0'
     save(filename,current)
 save('xl/workbook.xml',book)
 name='xl/worksheets/sheet1.xml'; root=ET.fromstring(entries[name][1]); cells={c.attrib['r']:c for c in root.findall('m:sheetData/m:row/m:c',ns)}
@@ -360,7 +368,7 @@ temporary=p.with_name(p.name+'.presentation.tmp')
 with zipfile.ZipFile(temporary,'w',compression=zipfile.ZIP_DEFLATED) as z:
     for filename,(info,content) in entries.items(): z.writestr(info,content)
 temporary.replace(p)
-`,output],{input:JSON.stringify({text:exactText,unlocked,frozen:layout.identity.length,topLeft:`${firstValue}5`,structural:layout.inline&&data.include_versions,hidden_start:layout.inline?layout.productColumn:null,hidden_end:layout.lastColumn,hidden_rows:layout.rows.filter(r=>r.hidden).map(r=>r.row)}),encoding:'utf8',windowsHide:true});
+`,output],{input:JSON.stringify({text:exactText,unlocked,include_versions:data.include_versions,frozen:layout.identity.length,topLeft:`${firstValue}5`,structural:layout.inline&&data.include_versions,hidden_start:layout.inline?layout.productColumn:null,hidden_end:layout.lastColumn,hidden_rows:layout.rows.filter(r=>r.hidden).map(r=>r.row)}),encoding:'utf8',windowsHide:true});
   if(finalized.status!==0)throw new Error(finalized.stderr||'Export presentation finalization failed');
   if(data.preview_path) {
     const reopened=await SpreadsheetFile.importXlsx(await FileBlob.load(output));

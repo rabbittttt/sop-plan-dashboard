@@ -20,9 +20,9 @@ from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, hori
 
 SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
-# Bump this when the visible managed workbook format changes without changing
-# its trusted cell map. Old exports omit the field and resolve to revision 0.
-PRESENTATION_VERSION = 2
+# Bump this when managed workbook rendering or Excel compatibility changes
+# without changing its trusted cell map. Old exports resolve to revision 0.
+PRESENTATION_VERSION = 3
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
