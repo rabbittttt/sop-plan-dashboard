@@ -465,7 +465,9 @@ class PlanRoundtrip:
         with self._lock():
             self._sync_before()
             with self.store.lock:
-                catalog = {p["id"]: p for p in self.store.read_sales()["products"]}
+                # Old downloads may still contain now-hidden summary source
+                # rows. Preserve their identities and saved edits on import.
+                catalog = {p["id"]: p for p in self.store.read_sales(include_excluded=True)["products"]}
                 if exported.get("manifest") is not None:
                     previous = self.store.db.execute("SELECT payload FROM plan_download_entry_imports WHERE token=?", (token,)).fetchone()
                     accepted_entries = json.loads(previous["payload"]) if previous else {}

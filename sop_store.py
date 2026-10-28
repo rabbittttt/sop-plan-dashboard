@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from sop_brand import brand_order_key
+from sop_source_rules import exclude_summary_sources, is_summary_generation, is_summary_product
 
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -299,9 +300,13 @@ class SOPStore:
     @staticmethod
     def _remap_sales(data, aliases):
         result = dict(data)
+        excluded_aliases = {p["id"] for p in data.get("products", [])
+                            if p["id"] in aliases and is_summary_product(p)}
         def remap(rows):
             output, keys = [], set()
             for row in rows:
+                if row["product_id"] in excluded_aliases:
+                    continue
                 item = {**row, "product_id": aliases.get(row["product_id"], row["product_id"])}
                 key = (item["product_id"], item.get("month"), item.get("metric"))
                 if key in keys:
@@ -314,8 +319,12 @@ class SOPStore:
             result["version_reference"] = {**data["version_reference"], "sales": remap(data["version_reference"].get("sales", []))}
         return result
 
-    def _catalog_sales(self, data):
-        return {**self._remap_sales(data, self.source_aliases()), "products": self._catalog_items()}
+    def _catalog_sales(self, data, include_excluded=False):
+        # Retain the internal catalog for old workbook identities. Presentation
+        # excludes summary source IDs before aliases can remap them to real IDs.
+        source = data if include_excluded else exclude_summary_sources(data)
+        result = {**self._remap_sales(source, self.source_aliases()), "products": self._catalog_items()}
+        return result if include_excluded else exclude_summary_sources(result)
 
     def _validate_model_aliases(self, data, aliases):
         """A model reference cannot disambiguate overlapping generations of one ID."""
@@ -338,6 +347,8 @@ class SOPStore:
                     generations.add(generation)
             months = {}
             for row in data.get("model_sales", []):
+                if is_summary_generation(row.get("generation")):
+                    continue
                 if row.get("generation") in generations and row.get("metric") == "locked_orders" and row.get("value") is not None:
                     months.setdefault(row["month"], set()).add(row["generation"])
             for month, overlap in months.items():
@@ -459,9 +470,13 @@ class SOPStore:
     def _auto_source_bindings(self, data, existing, aliases):
         incoming = {}
         for product in data["products"]:
+            if is_summary_product(product):
+                continue
             incoming.setdefault(catalog_name_key(product), []).append(product)
         known = {}
         for product in self._catalog_items():
+            if is_summary_product(product):
+                continue
             known.setdefault(catalog_name_key(product), []).append(product)
         bindings = {}
         for key, sources in incoming.items():
@@ -480,11 +495,11 @@ class SOPStore:
                 bindings[source_id] = target["id"]
         return bindings
 
-    def read_sales(self):
+    def read_sales(self, *, include_excluded=False):
         with self.lock:
             data = self._read_source_sales()
             self._sync_catalog(data)
-            return self._catalog_sales(data)
+            return self._catalog_sales(data, include_excluded=include_excluded)
 
     def list_products(self):
         return {"items": self.read_sales()["products"]}
@@ -625,9 +640,10 @@ class SOPStore:
             current = self.clock().astimezone(TZ)
             month = current.strftime("%Y-%m")
             end = horizon(month, settings["bridge_m6"])
+            visible_ids = {p["id"] for p in data["products"]}
             data.update({
-                "plans": [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month")],
-                "shipments": [dict(row) for row in self.db.execute("SELECT * FROM shipments ORDER BY product_id,month,source,batch")],
+                "plans": [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month") if row["product_id"] in visible_ids],
+                "shipments": [dict(row) for row in self.db.execute("SELECT * FROM shipments ORDER BY product_id,month,source,batch") if row["product_id"] in visible_ids],
                 "settings": settings, "now": stamp(current), "current_month": month, "plan_end": end,
                 "months": month_range(month, end),
                 "history_months": [month_add(month, offset) for offset in (-3, -2, -1)],
@@ -1011,9 +1027,12 @@ class SOPStore:
         payload = json.loads(sales["payload"]) if sales else {"products": [], "sales": [], "meta": {}, "sources": []}
         catalog = self.db.execute(f"SELECT id,payload FROM catalog_versions WHERE recorded_at {operator} ? ORDER BY recorded_at DESC,id DESC LIMIT 1", (cutoff_text,)).fetchone()
         if catalog:
-            payload["products"] = json.loads(catalog["payload"])
-            aliases = {sid: p["id"] for p in payload["products"] for sid in p.get("source_ids", []) if sid != p["id"]}
+            catalog_products = json.loads(catalog["payload"])
+            aliases = {sid: p["id"] for p in catalog_products for sid in p.get("source_ids", []) if sid != p["id"]}
+            # Remap while the original source IDs/generations are still
+            # available, before replacing them with the frozen catalog view.
             payload = self._remap_sales(payload, aliases)
+            payload["products"] = catalog_products
         settings_row = self.db.execute(f"SELECT payload FROM settings_versions WHERE recorded_at {operator} ? ORDER BY recorded_at DESC,id DESC LIMIT 1", (cutoff_text,)).fetchone()
         settings = json.loads(settings_row["payload"]) if settings_row else {"bridge_m6": True, "zero_week_anchor": "month_week_majority"}
         snap_month = business_date.strftime("%Y-%m")

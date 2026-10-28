@@ -351,8 +351,9 @@ class WorkbookSync:
         sales = self.store.read_sales()
         current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
         products = sales["products"]
+        product_ids = {product["id"] for product in products}
         plan_end = horizon(current, self.store.settings()["bridge_m6"])
-        plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.db.execute("SELECT * FROM plans")}
+        plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.db.execute("SELECT * FROM plans") if r["product_id"] in product_ids}
         business_months = sorted(set(month_range(current, plan_end))
                         | {month_add(current, offset) for offset in (-3, -2, -1)}
                         | {r["month"] for r in sales["sales"]}
@@ -373,14 +374,14 @@ class WorkbookSync:
         return {**signature_data, "plans": list(plans.values())}, signature
 
     def _workbook_product_ids(self):
-        current = {p["id"] for p in self.store.read_sales()["products"]}
+        current = {p["id"] for p in self.store.read_sales(include_excluded=True)["products"]}
         aliases = self.store.source_aliases() if hasattr(self.store, "source_aliases") else {}
         # A confirmed alias only allows an old row to be inspected. It never
         # redirects quantities; the complete emptiness check below is required.
         return current | {source for source, target in aliases.items() if target in current}
 
     def _exclude_empty_bound_sources(self, expected, baseline, accepted, values):
-        current = {p["id"] for p in self.store.read_sales()["products"]}
+        current = {p["id"] for p in self.store.read_sales(include_excluded=True)["products"]}
         aliases = self.store.source_aliases() if hasattr(self.store, "source_aliases") else {}
         removed = {p["id"] for p in expected["products"]} - current
         for pid in removed:
