@@ -233,6 +233,8 @@ class PlanRoundtrip:
         if not isinstance(body, dict):
             raise ValidationError("导出请求格式不正确。")
         source = dict(body)
+        requested_rules = source.pop("generation_rule_signature", None)
+        requested_mode = source.pop("generation_mode", None)
         ids = source.pop("row_product_ids", None)
         selected_ids = source.pop("selected_product_ids", None)
         clean = validate_export(source)
@@ -244,14 +246,19 @@ class PlanRoundtrip:
         with self._lock():
             self._sync_before()
             with self.store.lock:
-                products = {p["id"]: p for p in self.store.read_sales()["products"]}
+                sales = self.store.read_sales()
+                view = sales.get("generation_view", {})
+                if ((requested_rules is not None and requested_rules != view.get("rule_signature"))
+                        or (requested_mode is not None and requested_mode != view.get("mode"))):
+                    raise ValidationError("代际规则或展示模式已变化，请刷新看板后重新导出。")
+                products = {p["id"]: p for p in sales["products"]}
                 if any(pid not in products for pid in selected_ids):
                     raise ValidationError("车型版本目录已变化，请刷新看板后重新导出。")
                 selected = {pid: products[pid] for pid in selected_ids}
                 groups = {}
                 for pid, product in selected.items():
                     groups.setdefault((product["brand"], product["model"]), []).append(pid)
-                plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.db.execute("SELECT * FROM plans")}
+                plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.view_plans(sales)}
                 current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
                 end = horizon(current, self.store.settings()["bridge_m6"])
                 clean["current_month"] = current
@@ -297,7 +304,7 @@ class PlanRoundtrip:
                         row = plans.get((pid, month), {})
                         applicable = (not product.get("start_month") or month >= product["start_month"]) and (not product.get("end_month") or month <= product["end_month"])
                         correction = month < current and (row.get("sop") is not None or row.get("forecast") is not None)
-                        if (month <= end and (product.get("active", True) or month < current) and (applicable or correction)):
+                        if (not product.get("read_only") and month <= end and (product.get("active", True) or month < current) and (applicable or correction)):
                             allowed.append(month)
                             baseline[_key(pid, month)] = {"product_id": pid, "month": month,
                                                          "baseline_sop": row.get("sop"), "revision": row.get("revision", 0)}

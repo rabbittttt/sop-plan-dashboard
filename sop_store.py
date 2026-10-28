@@ -12,7 +12,8 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from sop_brand import brand_order_key
-from sop_source_rules import exclude_summary_sources, is_summary_generation, is_summary_product
+from sop_source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
+                              _generations as source_generations)
 
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -196,6 +197,7 @@ class SOPStore:
             cutoff_at TEXT NOT NULL, created_at TEXT NOT NULL, kind TEXT NOT NULL,
             label TEXT NOT NULL, plan_count INTEGER NOT NULL, payload TEXT NOT NULL,
             auto_key TEXT UNIQUE);
+        CREATE TABLE IF NOT EXISTS generation_summary_history (generation TEXT PRIMARY KEY);
         CREATE TRIGGER IF NOT EXISTS snapshots_no_update BEFORE UPDATE ON snapshots
           BEGIN SELECT RAISE(ABORT, 'Snapshots are immutable'); END;
         CREATE TRIGGER IF NOT EXISTS snapshots_no_delete BEFORE DELETE ON snapshots
@@ -207,6 +209,7 @@ class SOPStore:
                 self.db.execute(f"ALTER TABLE product_catalog ADD COLUMN {name} {definition}")
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("service_started_at", json.dumps(stamp(self.clock()))))
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("bridge_m6", "true"))
+        self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("generation_mode", json.dumps("detail")))
         self.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", ("zero_week_anchor", json.dumps("month_week_majority")))
         if not self.db.execute("SELECT 1 FROM settings_versions LIMIT 1").fetchone():
             self.db.execute("INSERT INTO settings_versions(recorded_at,payload) VALUES (?,?)", (stamp(self.clock()), json.dumps(self.settings())))
@@ -218,6 +221,10 @@ class SOPStore:
         if not isinstance(values, dict):
             raise ValidationError("设置必须为对象。")
         updates = {}
+        if "generation_mode" in values:
+            if not isinstance(values["generation_mode"], str) or values["generation_mode"] not in {"detail", "summary"}:
+                raise ValidationError("代际视图只能选择单代际或汇总代际。")
+            updates["generation_mode"] = values["generation_mode"]
         if "bridge_m6" in values:
             if not isinstance(values["bridge_m6"], bool):
                 raise ValidationError("bridge_m6 必须为布尔值。")
@@ -228,6 +235,8 @@ class SOPStore:
                 self._validate_sunday(anchor)
             updates["zero_week_anchor"] = anchor
         with self.lock:
+            if "generation_mode" in updates:
+                self._generation_rules()
             self.ensure_daily_snapshots()
             self.db.execute("BEGIN IMMEDIATE")
             try:
@@ -297,11 +306,18 @@ class SOPStore:
         with self.lock:
             return {row["source_id"]: row["target_id"] for row in self.db.execute("SELECT * FROM source_aliases ORDER BY bound_at,source_id")}
 
-    @staticmethod
-    def _remap_sales(data, aliases):
+    def _known_summary_names(self, rules=None):
+        rules = rules or self._generation_rules()
+        members = {member for group in rules["groups"].values() for member in group}
+        known = {row[0] for row in self.db.execute("SELECT generation FROM generation_summary_history")}
+        return summary_names(rules) | (known - members)
+
+    def _remap_sales(self, data, aliases):
         result = dict(data)
+        known = self._known_summary_names() if aliases else set()
         excluded_aliases = {p["id"] for p in data.get("products", [])
-                            if p["id"] in aliases and is_summary_product(p)}
+                            if p["id"] in aliases and source_generations(p)
+                            and all(g in known for g in source_generations(p))}
         def remap(rows):
             output, keys = [], set()
             for row in rows:
@@ -319,17 +335,87 @@ class SOPStore:
             result["version_reference"] = {**data["version_reference"], "sales": remap(data["version_reference"].get("sales", []))}
         return result
 
+    def _generation_rules(self):
+        try:
+            rules = load_merge_rules()
+        except MergeRuleError as error:
+            raise ValidationError(str(error)) from error
+        self.db.executemany("INSERT OR IGNORE INTO generation_summary_history(generation) VALUES (?)",
+                            [(name,) for name in summary_names(rules)])
+        return rules
+
+    def generation_view(self):
+        with self.lock:
+            rules = self._generation_rules()
+            mode = self.settings().get("generation_mode", "detail")
+            return {"mode": mode, "rule_signature": rules["signature"],
+                    "signature": mode + ":" + rules["signature"], "config_path": rules["config_path"],
+                    "derived": mode == "summary"}
+
     def _catalog_sales(self, data, include_excluded=False):
-        # Retain the internal catalog for old workbook identities. Presentation
-        # excludes summary source IDs before aliases can remap them to real IDs.
-        source = data if include_excluded else exclude_summary_sources(data)
-        result = {**self._remap_sales(source, self.source_aliases()), "products": self._catalog_items()}
-        return result if include_excluded else exclude_summary_sources(result)
+        catalog = self._catalog_items()
+        if include_excluded:
+            return {**data, "products": catalog}
+        rules = self._generation_rules()
+        known = {row[0] for row in self.db.execute("SELECT generation FROM generation_summary_history")}
+        mode = self.settings().get("generation_mode", "detail")
+        # Filter raw summary identities before aliases can mix them with real
+        # versions. Both modes use single-generation values as their foundation.
+        source, _ = project_generation_sources(data, "detail", rules, known)
+        result = {**self._remap_sales(source, self.source_aliases()), "products": catalog}
+        try:
+            result, warnings = project_generation_sources(result, mode, rules, known)
+        except MergeRuleError as error:
+            raise ValidationError(str(error)) from error
+        result["products"] = sorted(result["products"], key=lambda p: (brand_order_key(p.get("brand", "")),
+                                    p.get("model", ""), p.get("version", ""), p["id"]))
+        result["generation_view"] = {"mode": mode, "rule_signature": rules["signature"],
+            "signature": mode + ":" + rules["signature"], "config_path": rules["config_path"],
+            "warnings": warnings, "derived": mode == "summary"}
+        meta = dict(result.get("meta", {}))
+        coverage = dict(meta.get("metric_coverage", {}))
+        locks = [r for r in result.get("sales", []) if r.get("metric") == "locked_orders"]
+        model_locks = [r for r in result.get("model_sales", []) if r.get("metric") == "locked_orders"]
+        def known_sum(rows):
+            values = [r["value"] for r in rows if r.get("value") is not None]
+            return sum(values) if values else None
+        coverage["locked_orders"] = {**coverage.get("locked_orders", {}),
+            "monthly_total": known_sum(locks), "model_monthly_total": known_sum(model_locks),
+            "monthly_records": len(locks), "model_monthly_records": len(model_locks)}
+        result["meta"] = {**meta, "metric_coverage": coverage}
+        return result
+
+    def view_plans(self, sales=None):
+        """Return visible plans, deriving summary rows without persisting them."""
+        with self.lock:
+            sales = sales if sales is not None else self.read_sales()
+            rows = [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month")]
+            visible = {p["id"]: p for p in sales["products"]}
+            result = [row for row in rows if row["product_id"] in visible and not visible[row["product_id"]].get("read_only")]
+            for product in sales["products"]:
+                if not product.get("read_only"):
+                    continue
+                members = set(product["member_product_ids"])
+                months = sorted({row["month"] for row in rows if row["product_id"] in members})
+                for month in months:
+                    values = [row for row in rows if row["product_id"] in members and row["month"] == month]
+                    item = {"product_id": product["id"], "month": month, "revision": 0,
+                            "owner": "单代际自动汇总", "reason": "自动汇总", "notes": "", "read_only": True,
+                            "updated_at": max((str(row.get("updated_at", "")) for row in values), default="")}
+                    for field in ("sop", "forecast"):
+                        known_values = [row[field] for row in values if row.get(field) is not None]
+                        item[field] = sum(known_values) if known_values else None
+                    item["known_members"] = sum(row.get("sop") is not None for row in values)
+                    item["total_members"] = len(members)
+                    item["partial"] = item["known_members"] < len(members) or bool(product.get("missing_member_generations"))
+                    result.append(item)
+            return result
 
     def _validate_model_aliases(self, data, aliases):
         """A model reference cannot disambiguate overlapping generations of one ID."""
         if not aliases:
             return
+        known_summaries = self._known_summary_names()
         incoming = {p["id"]: p for p in data.get("products", [])}
         catalog = {row["id"]: row for row in self.db.execute("SELECT * FROM product_catalog")}
         for target in set(aliases.values()):
@@ -347,7 +433,7 @@ class SOPStore:
                     generations.add(generation)
             months = {}
             for row in data.get("model_sales", []):
-                if is_summary_generation(row.get("generation")):
+                if row.get("generation") in known_summaries:
                     continue
                 if row.get("generation") in generations and row.get("metric") == "locked_orders" and row.get("value") is not None:
                     months.setdefault(row["month"], set()).add(row["generation"])
@@ -469,13 +555,17 @@ class SOPStore:
 
     def _auto_source_bindings(self, data, existing, aliases):
         incoming = {}
+        known_summaries = self._known_summary_names()
+        def summary_only(product):
+            generations = source_generations(product)
+            return bool(generations) and all(g in known_summaries for g in generations)
         for product in data["products"]:
-            if is_summary_product(product):
+            if summary_only(product):
                 continue
             incoming.setdefault(catalog_name_key(product), []).append(product)
         known = {}
         for product in self._catalog_items():
-            if is_summary_product(product):
+            if summary_only(product):
                 continue
             known.setdefault(catalog_name_key(product), []).append(product)
         bindings = {}
@@ -642,7 +732,7 @@ class SOPStore:
             end = horizon(month, settings["bridge_m6"])
             visible_ids = {p["id"] for p in data["products"]}
             data.update({
-                "plans": [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month") if row["product_id"] in visible_ids],
+                "plans": self.view_plans(data),
                 "shipments": [dict(row) for row in self.db.execute("SELECT * FROM shipments ORDER BY product_id,month,source,batch") if row["product_id"] in visible_ids],
                 "settings": settings, "now": stamp(current), "current_month": month, "plan_end": end,
                 "months": month_range(month, end),
@@ -669,6 +759,8 @@ class SOPStore:
             pid = change.get("product_id")
             if not isinstance(pid, str) or pid not in products:
                 raise ValidationError("存在无法识别的产品。")
+            if products[pid].get("read_only"):
+                raise ValidationError("汇总代际为单代际自动相加，只读；请切换单代际后维护。")
             month = validate_month(change.get("month"))
             if entity == "plan":
                 current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
@@ -1130,7 +1222,8 @@ class SOPStore:
                         and (not model or p.get("model") == model) and (not product_id or p["id"] == product_id)
                         and (p["id"] in existing_ids or ((not p.get("start_month") or month >= p["start_month"])
                              and (not p.get("end_month") or month <= p["end_month"])))]
-            product_ids = {p["id"] for p in products}
+            product_ids = {pid for p in products for pid in p.get("member_product_ids", [p["id"]])}
+            incomplete_groups = any(p.get("missing_member_generations") for p in products)
             if not products:
                 raise ValidationError("没有符合筛选条件的产品。")
             configured = zero_week_date or self.settings().get("zero_week_anchor", "month_week_majority")
@@ -1142,7 +1235,7 @@ class SOPStore:
                 zero = self._validate_sunday(configured)
             shipment_rows = [dict(r) for r in self.db.execute("SELECT * FROM shipments WHERE month=?", (month,)) if r["product_id"] in product_ids]
             covered = {r["product_id"] for r in shipment_rows}
-            actual = sum(r["quantity"] for r in shipment_rows) if covered == product_ids else None
+            actual = sum(r["quantity"] for r in shipment_rows) if covered == product_ids and not incomplete_groups else None
             current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
             actual_status = "missing" if actual is None else "pending" if any(r["status"] == "pending" for r in shipment_rows) else "in_progress" if month >= current_month else "settled"
             rows = []
@@ -1153,7 +1246,7 @@ class SOPStore:
                 plan = None
                 if snap:
                     candidates = [r for r in json.loads(snap["payload"])["plans"] if r["month"] == month and r["product_id"] in product_ids]
-                    if {r["product_id"] for r in candidates if r["sop"] is not None} == product_ids:
+                    if {r["product_id"] for r in candidates if r["sop"] is not None} == product_ids and not incomplete_groups:
                         plan = sum(r["sop"] for r in candidates)
                 match = None
                 if not snap:

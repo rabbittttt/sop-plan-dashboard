@@ -29,7 +29,7 @@ LOOKUP = {(p["product_id"], p["month"]): p for p in PLANS}
 
 
 def previous_view():
-    return patch("sop_store.exclude_summary_sources", lambda data, *args, **kwargs: data)
+    return patch("sop_store.project_generation_sources", lambda data, *args, **kwargs: (data, []))
 
 
 class SummaryCatalogTest(unittest.TestCase):
@@ -37,6 +37,13 @@ class SummaryCatalogTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="sop-summary-catalog-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        config = self.root / "shared_config.py"
+        config.write_text("MERGE_GROUPS = " + repr({
+            "问界 M5 汇总": ["问界 M5 2025款", "问界 M5 2026款"],
+            "智界 S10 2026款汇总": ["智界 S10 2026款"]}), encoding="utf-8")
+        rule_patch = patch("sop_source_rules.DEFAULT_CONFIG_PATH", config)
+        rule_patch.start()
+        self.addCleanup(rule_patch.stop)
         self.source = self.root / "sales.json"
         self.data = {"meta": {}, "products": PRODUCTS,
                      "sales": [{"product_id": p["id"], "month": "2026-10", "metric": "locked_orders", "value": (i+1)*100}

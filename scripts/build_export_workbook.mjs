@@ -203,7 +203,7 @@ async function main() {
   }
   const write=(row,col,values)=>writeTo(sheet,row,col,values);
   const subtitle=layout.inline
-    ?(data.include_versions?planGuidance(data.include_locks):'单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。')
+    ?(data.include_versions?planGuidance(data.include_locks,data.roundtrip.products.some(p=>p.read_only)):'单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。')
     :data.roundtrip
     ?'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。'+(data.include_versions?'修改月计划量后保存，在看板“导入Excel”回填。':'当前为车型汇总，只读；回填计划请导出版本明细。')
     :'单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；带“锁单”字样的行为交车锁单数。导出副本不参与计划同步。';
@@ -239,7 +239,7 @@ async function main() {
     for(const [c,formula] of Object.entries(row.formulas))sheet.getRange(column(Number(c))+row.row).formulas=[[formula]];
     if(data.roundtrip&&data.include_versions) {
       if(row.kind==='product'&&row.metric==='SOP计划量') {
-        if(layout.inline)unlocked.push('A'+row.row,'B'+row.row,'C'+row.row);
+        if(layout.inline&&!data.roundtrip.products.find(p=>p.id===row.productId)?.read_only)unlocked.push('A'+row.row,'B'+row.row,'C'+row.row);
         for(const col of layout.columns)if(col.kind==='month'&&data.roundtrip.editable_months_by_product[row.productId].includes(col.month)) {
           const address=column(col.column)+row.row;
           unlocked.push(address);mapping.push(['plan',row.productId,col.month,address,row.values[col.column]??null]);

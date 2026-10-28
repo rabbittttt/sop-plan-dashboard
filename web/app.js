@@ -22,6 +22,7 @@ let expanded = new Set(), allExpanded = false, selected = null, snapshotList = [
 let planIndex = new Map(), salesIndex = new Map(), shipmentIndex = new Map();
 let owner = localStorage.getItem('sop-owner') || '';
 let matchMonth = '', matchProduct = '', comparison = null, activeRequest = 0;
+let generationSwitchPending = false, generationViewError = '';
 const key = (id, month) => `${id}|${month}`;
 function shift(month, n) { const [y,m] = month.split('-').map(Number); const d = new Date(Date.UTC(y,m-1+n,1)); return d.toISOString().slice(0,7); }
 function shortMonth(m) { return `${m.slice(0,4)}.${m.slice(5)}`; }
@@ -39,11 +40,52 @@ function indexData() {
   shipmentIndex = new Map((state.shipments || []).map(p=>[key(p.product_id,p.month),p]));
 }
 async function load(render = true) {
-  state = await api('/api/state'); indexData();
+  state = await api('/api/state'); generationViewError=state.generation_view?.error||''; indexData();
   target ||= state.current_month; matchMonth ||= shift(state.current_month,-1); metric = 'locked_orders';
   $('#current-time').textContent = `北京时间 ${dateText(state.now)}`;
   const ob = $('#owner-btn'); if (ob) ob.textContent = owner || '设置维护人';
   if(render) await renderPage();
+}
+function generationMode() { return state?.generation_view?.mode||state?.settings?.generation_mode||'detail'; }
+function generationModeLabel(mode=generationMode()) { return mode==='summary'?'汇总代际':'单代际'; }
+function generationStatusChanged(view) {
+  if(!view)return false;
+  const previous=state?.generation_view||{};
+  return ['mode','rule_signature','error'].some(field=>(view[field]||'')!==(previous[field]||''));
+}
+function showGenerationError(message) {
+  generationViewError=message;
+  if(page!=='history')$('#app').innerHTML=`<section class="card empty-state" role="alert"><h1>代际范围暂不可用</h1><p>${esc(message)}</p><p>请修正规则后点击“刷新数据”；页面也会自动重试。</p></section>`;
+}
+function generationWarnings() {
+  const notes=(state.generation_view?.warnings||[]).map(item=>typeof item==='string'?item:item.message).filter(Boolean);
+  if(generationMode()==='summary')notes.unshift('汇总代际计划由成员单代际自动相加，只读；请切换至单代际维护。未参与汇总的车型仍可维护。');
+  return notes.length?`<div class="callout subtle" role="status"><p><strong>${generationModeLabel()}范围提示：</strong>${notes.map(esc).join('；')}</p></div>`:'';
+}
+async function changeGenerationMode(value,control) {
+  if(generationSwitchPending)return;
+  if(!['detail','summary'].includes(value))throw new Error('请选择单代际或汇总代际');
+  if(value===generationMode())return;
+  generationSwitchPending=true;control.disabled=true;
+  const app=$('#app');app.inert=true;app.setAttribute('aria-busy','true');
+  try {
+    const result=await api('/api/settings',{generation_mode:value});
+    if(result.ok===false)throw new Error(result.error||result.message||'代际范围切换失败');
+    model='';query='';selected=null;matchProduct='';expanded.clear();
+    await load();
+    const sync=result.workbook_sync;
+    toast(`已切换为${generationModeLabel()}${sync&&['error','pending','conflict'].includes(sync.status)?'；'+(sync.message||'Excel待同步'):''}`,!!sync&&['error','pending','conflict'].includes(sync.status));
+  } catch(error) {
+    // A lost response can follow a successful save. Re-read the authoritative
+    // mode before showing another editable table or restoring the selector.
+    try { await load(); }
+    catch { showGenerationError('无法确认当前代际范围，请刷新重试。'+error.message); }
+    toast(error.message,true);
+  } finally {
+    generationSwitchPending=false;control.disabled=false;control.value=generationMode();
+    app.inert=false;app.removeAttribute('aria-busy');
+    $('#generation-filter')?.focus({preventScroll:true});
+  }
 }
 function compareBrands(a,b) {
   const rank=b=>brands.includes(b)?brands.indexOf(b):brands.length;
@@ -74,6 +116,7 @@ function planMonths() {
 function isPlanMonthOpen(month) { return (!state.plan_end||month<=state.plan_end)&&planMonths().includes(month); }
 function productApplies(p,month) { return (!p.start_month||month>=p.start_month)&&(!p.end_month||month<=p.end_month); }
 function canEditProduct(p,month) {
+  if(p.read_only)return false;
   const row=planIndex.get(key(p.id,month));
   const historicalCorrection=month<state.current_month&&(row?.sop!=null||row?.forecast!=null);
   return isPlanMonthOpen(month)&&(p.active!==false||month<state.current_month)&&(productApplies(p,month)||historicalCorrection);
@@ -114,11 +157,12 @@ function sumSales(ps,month, data=salesIndex,allowModelTotals=ps.length>1) {
 function sumPlan(ps,month,field,data=planIndex) {
   ps=ps.filter(p=>(productApplies(p,month)&&(p.active!==false||p.end_month||month<state.current_month))||data.get(key(p.id,month))?.[field]!=null);
   const vals=ps.map(p=>data.get(key(p.id,month))?.[field]); const known=vals.filter(v=>v!=null);
-  return {value:known.length?known.reduce((a,b)=>a+b,0):null, known:known.length, total:ps.length};
+  const partial=ps.some(p=>data.get(key(p.id,month))?.partial);
+  return {value:known.length?known.reduce((a,b)=>a+b,0):null, known:known.length, total:ps.length,...(partial?{partial:true}:{})};
 }
 function quantity(q, pending='待维护') {
   if(q.value==null)return q.reference_conflict?'<span class="missing" title="关联的新旧来源在同月都有车型锁单，请核对来源">来源冲突</span>':`<span class="missing">${pending}</span>`;
-  const note=[q.model_reference?'源表交车锁单数量行，车型原值':'',q.reference_conflict?'同一版本的新旧来源同月冲突，冲突部分未汇总':'',q.known<q.total?'仅已知项合计，仍有缺项':''].filter(Boolean).join('；');
+  const note=[q.model_reference?'源表交车锁单数量行，车型原值':'',q.reference_conflict?'同一版本的新旧来源同月冲突，冲突部分未汇总':'',q.partial||q.known<q.total?'仅已知项合计，仍有缺项':''].filter(Boolean).join('；');
   return note?`<span title="${note}" aria-label="${fmt(q.value)}，${note}">${fmt(q.value)}</span>`:fmt(q.value);
 }
 function opt(value,label,current) { return `<option value="${esc(value)}" ${value===current?'selected':''}>${esc(label)}</option>`; }
@@ -141,7 +185,7 @@ function selectedPanel(ps) {
 }
 function annualQuantity(ps,visibleMonths,field,allowModelTotals=ps.length>1) {
   const quantities=visibleMonths.map(m=>field==='locks'?sumSales(ps,m,salesIndex,allowModelTotals):sumPlan(ps,m,'sop')).filter(q=>q.total>0);
-  const known=quantities.filter(q=>q.value!=null),partial=known.some(q=>q.known<q.total);
+  const known=quantities.filter(q=>q.value!=null),partial=known.some(q=>q.partial||q.known<q.total);
   return {value:known.length?known.reduce((sum,q)=>sum+q.value,0):null,knownMonths:known.length,totalMonths:quantities.length,partial,complete:quantities.length>0&&known.length===quantities.length&&!partial,model_reference:known.some(q=>q.model_reference)};
 }
 function annualCell(ps,visibleMonths,field,planYear='',allowModelTotals=ps.length>1) {
@@ -160,7 +204,7 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
   const one=level==='version', p=one?ps[0]:null;
   const cls=level==='total'?'total-row':level==='brand'?'group-row':one?'version-row':'model-row';
   const isLock=field==='locks';
-  const labelContent=one?`<button class="row-link" data-detail="${p.id}">${esc(label)}</button>${p.active===false?'<small>已停用</small>':''}${p.name_conflict?'<small class="catalog-alert">同名待区分</small>':''}`:level==='model'?`<button class="row-toggle" data-expand="${esc(id)}" aria-expanded="${isOpen}"><span>${isOpen?'−':'+'}</span>${esc(label)} <em>${ps.length}版本</em></button>`:`<strong>${esc(label)}</strong> <small>${ps.length}版本</small>`;
+  const labelContent=one?`<button class="row-link" data-detail="${p.id}">${esc(label)}</button>${p.read_only?'<small>自动汇总 · 只读</small>':p.active===false?'<small>已停用</small>':''}${p.name_conflict?'<small class="catalog-alert">同名待区分</small>':''}`:level==='model'?`<button class="row-toggle" data-expand="${esc(id)}" aria-expanded="${isOpen}"><span>${isOpen?'−':'+'}</span>${esc(label)} <em>${ps.length}版本</em></button>`:`<strong>${esc(label)}</strong> <small>${ps.length}版本</small>`;
   const cells=visibleMonths.map(m=>{
     const past=m<state.current_month?' past-month':'';
     let cell;
@@ -171,8 +215,8 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
     } else {
       const q=sumPlan(ps,m,'sop');
       const open=isPlanMonthOpen(m)&&(!one||canEditProduct(p,m));
-      const closedLabel=one&&!productApplies(p,m)?'未适用':one&&p.active===false?'—':'未开放';
-      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${open?'':` title="${one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内'}"`}>${one&&open?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护，点击输入计划量':'点击维护计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
+      const closedLabel=one&&p.read_only?'—':one&&!productApplies(p,m)?'未适用':one&&p.active===false?'—':'未开放';
+      cell=`<td class="sop-cell number${past}${open?'':' closed-month'}"${open?'':` title="${one&&p.read_only?'汇总代际计划自动相加，请切换至单代际维护':one&&p.active===false?'版本已停用，已有计划保留':one&&!productApplies(p,m)?'此月不在版本适用月份内':'此月份不在已开放计划范围内'}"`}>${one&&open?`<button class="edit-cell" data-edit="${p.id}" data-month="${m}" aria-label="编辑${esc(p.version)} ${m} SOP计划${q.value==null?'（待维护）':''}" title="${q.value==null?'待维护，点击输入计划量':'点击维护计划量'}">${quantity(q,'—')}</button>`:quantity(q,open?'—':closedLabel)}</td>`;
     }
     return cell+(range==='rolling'&&m.endsWith('-12')?calendarPlanCell(ps,m.slice(0,4),field):'');
   }).join('');
@@ -195,6 +239,7 @@ function workbookStrip() {
   return `<span class="sheet-sync ${synced?'synced':bad||w.status==='pending'?'warn':'neutral'}" title="${esc(w.message||'Excel保存后自动同步')}" role="status"><i class="status-dot"></i>${label}</span>${bad?button('查看问题','workbook-status','small'):''}`;
 }
 function planning() {
+  if(generationViewError)return showGenerationError(generationViewError);
   normalizePlanningFilters();
   const years=planYears();selectPlanYear(years.includes(planYear)?planYear:state.current_month.slice(0,4));
   const ps=products(),visible=months(),editable=visible.filter(isPlanMonthOpen),rolling=range==='rolling';
@@ -213,18 +258,18 @@ function planning() {
     }
   }
   rows+=planRow(ps,brand?`${brand}合计`:showWenjie?'鸿蒙智行合计':'合计（不含问界）','total','',visible);
-  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${visibleBrands().map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('车型与版本','manage-products','small')}${button(state.workbook_sync?.status==='absent'?'创建维护表':'Excel维护','open-workbook','primary small')}${button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
+  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">代际<select id="generation-filter" title="参与汇总的代际只展示一组；未参与汇总的车型保留">${opt('detail','仅单代际',generationMode())}${opt('summary','仅汇总代际',generationMode())}</select></label><label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${visibleBrands().map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('车型与版本','manage-products','small')}${button(state.workbook_sync?.status==='absent'?'创建维护表':'Excel维护','open-workbook','primary small')}${button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
     <div class="annual-heading"><h1>SOP计划${rolling?' · M+6':''}</h1><p>${period} · ${rolling?'前5个月＋当月＋未来6个月':'全年月度对照'}<span>单位：辆</span></p></div>
     <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button('批量维护','bulk-plan','small',editable.length?'':'disabled')}${button(wenjieToggleLabel(),'toggle-wenjie','small lock-toggle',`aria-pressed="${showWenjie}" title="点击${showWenjie?'隐藏':'显示'}问界，合计随展示范围变化"`)}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}" title="点击${showLocks?'隐藏':'显示'}车型及版本锁单数"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
-    <section class="card plan-card annual-sheet${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
+    ${generationWarnings()}<section class="card plan-card annual-sheet${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
     <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?`车型锁单取“交车锁单”行，版本锁单取“版本／数量”行；版本锁单最新来源月：${versionLockLatest?shortMonth(versionLockLatest):'暂无'}。`:''):'锁单数已隐藏，可用上方按钮打开。'}点击车型展开版本${showLocks?'锁单和':''}计划。</span></div>
     ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;
 }
 function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';$('#edit-dialog').showModal(); }
 function closeDialog() { $('#edit-dialog').close(); }
 function productManager() {
-  const catalog=state.products;
-  openDialog(`<div id="catalog-manager"><h2>车型与版本</h2><p class="subtitle">目录取锁单来源与手工维护的全集；新增、改名后自动更新计划表。</p><div class="catalog-toolbar"><label class="field">查找<input id="catalog-search" placeholder="品牌、车型或版本"></label><div class="toolbar">${button('车型改名','rename-model')}${button('新增版本','new-product','primary')}</div></div><p class="form-help">车型来自销量工作表名，版本来自“版本／数量”区域。版本显示不带年款；未上市产品也可先建立并填写计划。手工版本与新来源的品牌、车型、版本唯一匹配时自动关联；多个代际同名时保留独立记录，核对后可用“关联来源”。</p><div class="table-scroll catalog-scroll"><table class="detail-table"><thead><tr><th>品牌 / 车型</th><th>版本</th><th>状态 / 来源</th><th>维护</th></tr></thead><tbody>${catalog.map(p=>`<tr data-catalog-search="${esc(`${p.brand} ${p.model} ${p.version}`.toLowerCase())}"><td>${esc(p.brand)}<strong>${esc(p.model)}</strong></td><td>${esc(p.version)}${p.name_conflict?'<small class="catalog-alert">同名记录，请核对来源并区分</small>':''}</td><td><span class="badge ${p.active===false?'neutral':'good'}">${p.active===false?'已停用':'使用中'}</span><small>${p.source_backed===false?'手工建立':p.source_present===false?'本次来源未包含':'销量来源'}</small>${p.name_conflict?`<small>${esc(p.source_generation||p.generation||'手工建立')}</small>`:''}</td><td><button type="button" class="button small" data-catalog-edit="${esc(p.id)}" aria-label="维护${esc(p.brand)} ${esc(p.model)} ${esc(p.version)}">维护</button><button type="button" class="button small" data-catalog-bind="${esc(p.id)}" aria-label="关联${esc(p.model)} ${esc(p.version)}的销量来源">关联来源</button></td></tr>`).join('')}</tbody></table></div><p class="form-help">日常Excel只填计划量；新增可直接在主表插入明细行，填写品牌、车型、版本和计划量；改名直接修改名称，删除整行表示停用。停用保留已有数量和历史快照，当月及未来不再新增计划。</p><div class="dialog-actions">${button('关闭','close-dialog')}</div></div>`);
+  const catalog=state.products.filter(p=>!p.read_only);
+  openDialog(`<div id="catalog-manager"><h2>车型与版本</h2><p class="subtitle">当前可维护目录取销量来源与手工维护的全集；汇总代际由成员自动生成，请切换至单代际维护。</p><div class="catalog-toolbar"><label class="field">查找<input id="catalog-search" placeholder="品牌、车型或版本"></label><div class="toolbar">${button('车型改名','rename-model')}${button('新增版本','new-product','primary')}</div></div><p class="form-help">车型来自销量工作表名，版本来自“版本／数量”区域。版本显示不带年款；未上市产品也可先建立并填写计划。手工版本与新来源的品牌、车型、版本唯一匹配时自动关联；多个代际同名时保留独立记录，核对后可用“关联来源”。</p><div class="table-scroll catalog-scroll"><table class="detail-table"><thead><tr><th>品牌 / 车型</th><th>版本</th><th>状态 / 来源</th><th>维护</th></tr></thead><tbody>${catalog.map(p=>`<tr data-catalog-search="${esc(`${p.brand} ${p.model} ${p.version}`.toLowerCase())}"><td>${esc(p.brand)}<strong>${esc(p.model)}</strong></td><td>${esc(p.version)}${p.name_conflict?'<small class="catalog-alert">同名记录，请核对来源并区分</small>':''}</td><td><span class="badge ${p.active===false?'neutral':'good'}">${p.active===false?'已停用':'使用中'}</span><small>${p.source_backed===false?'手工建立':p.source_present===false?'本次来源未包含':'销量来源'}</small>${p.name_conflict?`<small>${esc(p.source_generation||p.generation||'手工建立')}</small>`:''}</td><td><button type="button" class="button small" data-catalog-edit="${esc(p.id)}" aria-label="维护${esc(p.brand)} ${esc(p.model)} ${esc(p.version)}">维护</button><button type="button" class="button small" data-catalog-bind="${esc(p.id)}" aria-label="关联${esc(p.model)} ${esc(p.version)}的销量来源">关联来源</button></td></tr>`).join('')}</tbody></table></div><p class="form-help">日常Excel只填计划量；新增可直接在主表插入明细行，填写品牌、车型、版本和计划量；改名直接修改名称，删除整行表示停用。停用保留已有数量和历史快照，当月及未来不再新增计划。</p><div class="dialog-actions">${button('关闭','close-dialog')}</div></div>`);
   $('#catalog-search').oninput=e=>{const term=e.target.value.trim().toLowerCase();$$('[data-catalog-search]').forEach(row=>row.hidden=!row.dataset.catalogSearch.includes(term));};
 }
 function productFormError(err) {
@@ -232,13 +277,15 @@ function productFormError(err) {
 }
 function bindProductSource(id) {
   const p=state.products.find(x=>x.id===id);if(!p)return;
-  const candidates=state.products.filter(x=>x.id!==id&&x.source_backed&&x.source_present!==false&&!state.plans.some(r=>r.product_id===x.id)&&!(state.shipments||[]).some(r=>r.product_id===x.id));
+  if(p.read_only)return toast('汇总代际只读，请切换至单代际维护',true);
+  const candidates=state.products.filter(x=>!x.read_only&&x.id!==id&&x.source_backed&&x.source_present!==false&&!state.plans.some(r=>r.product_id===x.id)&&!(state.shipments||[]).some(r=>r.product_id===x.id));
   openDialog(`<form id="bind-source-form"><h2>关联销量来源</h2><p class="subtitle">${esc(p.brand)} · ${esc(p.model)} · ${esc(p.version)}</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><p>保留这个版本已填的计划，将选择的销量来源关联到同一条记录。适用于提前建立的版本上市，或原始文件改名。</p><div class="form-grid"><label class="field full">对应的销量版本<select id="bind-source" required><option value="">请选择并核对来源</option>${candidates.map(x=>opt(x.id,`${x.brand} ${x.model} · ${x.version}（${x.source_generation||x.generation||'销量来源'}）`,'' )).join('')}</select></label><label class="field full">维护人<input id="bind-owner" value="${esc(owner)}" required maxlength="100"></label></div><p class="form-help">只允许关联尚未维护计划或发货实绩的来源行。关联后目录只保留当前版本一行，原历史快照不变；来源已有业务记录或同月数据冲突时会提示处理，不自动覆盖。</p>${candidates.length?'':'<p class="inline-error">当前没有可关联的来源版本。</p>'}<div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary" ${candidates.length?'':'disabled'}>关联并更新模板</button></div></form>`);
   $('#bind-source-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{
     await saveCatalog([{id:p.id,revision:p.revision||0,bind_source_id:$('#bind-source').value}],$('#bind-owner').value.trim());
   }catch(err){productFormError(err);save.disabled=false;}};
 }
 async function saveCatalog(changes,newOwner) {
+  if(changes.some(change=>state.products.find(p=>p.id===change.id)?.read_only))throw new Error('汇总代际只读，请切换至单代际维护');
   const result=await api('/api/products',{changes,owner:newOwner});
   owner=newOwner;localStorage.setItem('sop-owner',owner);
   closeDialog();brand='';model='';query='';
@@ -249,6 +296,7 @@ async function saveCatalog(changes,newOwner) {
 }
 function editProduct(id='') {
   const p=state.products.find(x=>x.id===id)||{brand:brand||'',model:model||'',version:'',active:true,start_month:state.current_month};
+  if(p.read_only)return toast('汇总代际只读，请切换至单代际维护',true);
   const knownBrands=[...new Set([...brands,...state.products.map(x=>x.brand)])];
   openDialog(`<form id="catalog-form"><h2>${id?'维护版本':'新增版本'}</h2><p class="subtitle">${id?'改名沿用原记录，已填计划及历史不丢失。':'已有车型下增加版本，或填写新车型名称提前安排计划。'}</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><div class="form-grid"><label class="field">品牌<input id="catalog-brand" list="catalog-brands" value="${esc(p.brand)}" required maxlength="100"><datalist id="catalog-brands">${knownBrands.map(b=>`<option value="${esc(b)}">`).join('')}</datalist></label><label class="field">车型<input id="catalog-model" list="catalog-models" value="${esc(p.model)}" required maxlength="100"><datalist id="catalog-models">${[...new Set(state.products.map(x=>x.model))].map(m=>`<option value="${esc(m)}">`).join('')}</datalist></label><label class="field full">版本名称<input id="catalog-version" value="${esc(p.version)}" placeholder="如 Max 增程版，无需填写2026款" required maxlength="200"></label><label class="field">开始计划月份<input id="catalog-start" type="month" value="${esc(p.start_month&&p.start_month!=='1900-01'?p.start_month:'')}"></label><label class="field">结束计划月份（可留空）<input id="catalog-end" type="month" value="${esc(p.end_month||'')}"></label><label class="field">状态<select id="catalog-active">${opt('active','使用中',p.active===false?'inactive':'active')}${opt('inactive','已停用',p.active===false?'inactive':'active')}</select></label><label class="field">维护人<input id="catalog-owner" value="${esc(owner)}" required maxlength="100"></label></div>${id?`<p class="form-help">来源：${esc(p.source_generation||p.generation||'手工建立')}。只改显示名，不改变销量来源对应关系。整车所有版本一起改名，请使用“车型改名”。</p>`:''}<p class="form-help">停用后保留已有计划，不自动清空未来数量；历史月份仍可修正。不同产品请使用不同版本名称。</p><div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary">保存并更新模板</button></div></form>`);
   $('#catalog-active').onchange=()=>{if($('#catalog-active').value==='active'&&p.active===false)$('#catalog-end').value='';};
@@ -259,14 +307,14 @@ function editProduct(id='') {
   }catch(err){productFormError(err);save.disabled=false;}};
 }
 function renameModel() {
-  const groups=[...new Set(state.products.map(p=>`${p.brand}\t${p.model}`))];
+  const groups=[...new Set(state.products.filter(p=>!p.read_only).map(p=>`${p.brand}\t${p.model}`))];
   if(!groups.length)return editProduct();
   openDialog(`<form id="rename-model-form"><h2>车型改名</h2><p class="subtitle">将该车型下所有版本一起改名，保留原计划与销量关联。</p><div id="catalog-error" class="inline-error" role="alert" tabindex="-1"></div><div class="form-grid"><label class="field full">当前车型<select id="rename-from">${groups.map(g=>opt(g,g.replace('\t',' · '),`${brand}\t${model}`)).join('')}</select></label><label class="field">新车型名称<input id="rename-to" required maxlength="100"></label><label class="field">维护人<input id="rename-owner" value="${esc(owner)}" required maxlength="100"></label></div><div class="dialog-actions">${button('返回目录','manage-products')}<button type="submit" class="button primary">保存并更新模板</button></div></form>`);
   $('#rename-to').value=$('#rename-from').value.split('\t')[1];
   $('#rename-from').onchange=()=>{$('#rename-to').value=$('#rename-from').value.split('\t')[1];};
   $('#rename-model-form').onsubmit=async e=>{e.preventDefault();const save=$('button[type="submit"]',e.target);save.disabled=true;try{
     const [b,m]=$('#rename-from').value.split('\t'),newModel=$('#rename-to').value.trim();
-    const changes=state.products.filter(p=>p.brand===b&&p.model===m).map(p=>({id:p.id,revision:p.revision||0,brand:p.brand,model:newModel,version:p.version,active:p.active!==false}));
+    const changes=state.products.filter(p=>!p.read_only&&p.brand===b&&p.model===m).map(p=>({id:p.id,revision:p.revision||0,brand:p.brand,model:newModel,version:p.version,active:p.active!==false}));
     await saveCatalog(changes,$('#rename-owner').value.trim());
   }catch(err){productFormError(err);save.disabled=false;}};
 }
@@ -280,10 +328,11 @@ function bulkPlan() {
     const newOwner=$('#bulk-owner').value.trim();await api('/api/plans',{changes,owner:newOwner,reason:$('#bulk-reason').value,notes:$('#bulk-notes').value});owner=newOwner;localStorage.setItem('sop-owner',owner);closeDialog();await load();toast(`已保存 ${changes.length} 个版本的计划`);
   }catch(err){$('#form-error').textContent=err.message;save.disabled=false;}};
 }
-function editorOptions(id,ps=products()) {return ps.map(p=>opt(p.id,`${p.brand} · ${p.model} · ${p.version}`,id)).join('');}
+function editorOptions(id,ps=products()) {return ps.filter(p=>!p.read_only).map(p=>opt(p.id,`${p.brand} · ${p.model} · ${p.version}`,id)).join('');}
 function editPlan(id,month=target) {
   if(!isPlanMonthOpen(month))return toast('此月份不在已开放计划范围内',true);
   const p=state.products.find(p=>p.id===id); if(!p) return toast('请先选择一个版本',true);
+  if(p.read_only)return toast('汇总代际只读，请切换至单代际维护',true);
   if(!canEditProduct(p,month))return toast('此版本在该月不适用或已停用，已有计划仍保留',true);
   const record=planIndex.get(key(id,month))||{};
   openDialog(`<form id="plan-form"><h2>维护月度计划</h2><p class="subtitle">预测销量和SOP分别保存，均为全月总量。</p><div class="form-grid"><label class="field full">版本<select id="edit-product">${editorOptions(id,state.products.filter(x=>x.brand===p.brand&&canEditProduct(x,month)))}</select></label><label class="field full">目标月份<select id="edit-month">${planMonths().filter(m=>canEditProduct(p,m)).map(m=>opt(m,shortMonth(m),month)).join('')}</select></label><label class="field">预测销量（辆）<input id="edit-forecast" type="number" min="0" step="1" placeholder="待维护" value="${record.forecast??''}"></label><label class="field">SOP计划量（辆）<input id="edit-sop" type="number" min="0" step="1" placeholder="待维护" value="${record.sop??''}"></label><label class="field">维护人<input id="edit-owner" value="${esc(owner)}" required maxlength="60" placeholder="请输入姓名"></label><label class="field">调整原因<select id="edit-reason">${['首次维护','需求变化','供应变化','库存调整','产品变化','入库节奏变化','其他'].map(s=>opt(s,s,record.reason||'首次维护')).join('')}</select></label><label class="field full">调整说明<textarea id="edit-notes" rows="3" maxlength="1000" placeholder="简要记录判断依据">${esc(record.notes||'')}</textarea></label></div><p class="form-help">留空表示待维护；明确不安排时填0。其他人已更新时会提示冲突。</p><div class="inline-error" id="form-error" role="alert"></div><div class="dialog-actions">${button('取消','close-dialog') }<button type="submit" class="button primary">保存计划</button></div></form>`);
@@ -312,6 +361,7 @@ function editPlan(id,month=target) {
 }
 async function showDetail(id) {
   const p=state.products.find(p=>p.id===id); selected=id;
+  if(p?.read_only)return openDialog(`<h2>${esc(p.model)} · ${esc(p.version)}</h2><p>此汇总代际的SOP计划由成员单代际自动相加。请切换至“单代际”维护成员计划，汇总值会随之更新。</p><div class="dialog-actions">${button('关闭','close-dialog')}</div>`);
   const history=await api(`/api/history?product_id=${encodeURIComponent(id)}&month=${target}`); history.items=history.items.filter(h=>h.entity==='plan');
   const relevant=state.products.filter(x=>x.brand===p.brand&&x.model===p.model),lm=shift(state.current_month,-1);
   const versionSalesTotal=sumSales(relevant,lm,salesIndex,false),planTotal=sumPlan(relevant,target,'sop');
@@ -327,6 +377,7 @@ function maintenanceExportOptions() {
   return {includeLocks:false,includeVersions:true,includeWenjie:true,selectedMonths:planMonths(),allProducts:true};
 }
 function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths=[]}={},ps=products()) {
+  if(generationViewError)throw new Error(generationViewError);
   ps=sortedProducts(ps);
   const allowed=new Set(exportableMonths());
   if(!Array.isArray(selectedMonths)||!selectedMonths.length)throw new Error('请至少选择一个导出月份');
@@ -355,7 +406,7 @@ function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths
       const describe=(test,label)=>{const ms=chosen.filter((m,i)=>test(quantities[i]));if(ms.length)notes.push(`${ms.join('、')}：${label}`);};
       describe(q=>q.total===0,'未适用');
       describe(q=>q.total>0&&q.value==null,field==='locks'?'锁单缺失，留空':'计划待维护，留空');
-      describe(q=>q.value!=null&&q.known<q.total,'仅已知项合计，仍有缺项');
+      describe(q=>q.value!=null&&(q.partial||q.known<q.total),'仅已知项合计，仍有缺项');
       describe(q=>q.reference_conflict,'新旧来源同月冲突，冲突部分未汇总');
       const annual={};
       for(const year of annualYears) {
@@ -375,13 +426,14 @@ function buildPlanExport({includeLocks=false,includeVersions=true,selectedMonths
 function exportProducts(options) { return products({includeWenjie:options.includeWenjie??showWenjie,applyFilters:!options.allProducts}); }
 function exportScope(options) {
   const scope=options.allProducts?'全部品牌 · 全部车型':[brand||'全部品牌',model||'全部车型',query?`搜索“${query}”`:''].filter(Boolean).join(' · ');
-  return scope+((options.includeWenjie??showWenjie)?'':'（不含问界）');
+  return scope+((options.includeWenjie??showWenjie)?'':'（不含问界）')+' · '+generationModeLabel();
 }
 async function downloadPlanExport(options) {
   const result=buildPlanExport(options,exportProducts(options)),chosen=result.selectedMonths,includeVersions=result.headers.includes('版本');
   const scope=exportScope(options);
   const response=await fetch('/api/plans/export-xlsx',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
     schema_version:1,current_month:state.current_month,months:chosen,include_locks:!!options.includeLocks,include_versions:includeVersions,
+    ...(state.generation_view?{generation_mode:generationMode(),generation_rule_signature:state.generation_view.rule_signature}:{}),
     scope,headers:result.headers,rows:result.rows,annual_plans:result.annualPlans,row_product_ids:result.rowProductIds,selected_product_ids:result.selectedProductIds
   })});
   if(!response.ok){let message='Excel导出未完成，请重试';try{message=(await response.json()).error||message;}catch{}throw new Error(message);}
@@ -394,7 +446,7 @@ async function downloadPlanExport(options) {
 function exportPlans() {
   const defaults=maintenanceExportOptions(),maintenance=new Set(defaults.selectedMonths),available=exportableMonths(),current=new Set(months());
   const years=[...new Set(available.map(m=>m.slice(0,4)))],hasFilter=!!(brand||model||query);
-  openDialog(`<form id="export-plan-form"><h2>导出SOP计划</h2><p id="export-scope" class="subtitle"></p><p class="form-help">排版与维护输入表一致：完整计划周期、版本明细、只含计划量。问界选项默认跟随页面显示，可单独调整。导出后可直接填写计划量，再通过“导入Excel”同步。</p><div id="export-error" class="inline-error" role="alert"></div><fieldset class="export-content-options"><legend>导出内容</legend><label class="export-check"><input type="checkbox" id="export-wenjie" checked><span>包含问界</span></label><label class="export-check"><input type="checkbox" id="export-locks"><span>增加锁单行</span></label><label class="export-check"><input type="checkbox" id="export-versions" checked><span>包含版本明细（可填写、可导回）</span></label>${hasFilter?'<label class="export-check"><input type="checkbox" id="export-filtered"><span>仅导出当前筛选</span></label>':''}</fieldset><p class="form-help">取消版本明细后仅导出只读车型汇总，不能回填计划。不含问界的版本表仍可导回，问界已有数据不变。</p><div class="export-month-heading"><h3>导出月份</h3><div class="toolbar"><button type="button" class="button ghost small" data-export-preset="maintenance">恢复维护表格式</button><button type="button" class="button ghost small" data-export-months="current">当前视图</button><button type="button" class="button ghost small" data-export-months="all">全部月份</button><button type="button" class="button ghost small" data-export-months="none">清空</button></div></div><div class="export-month-list">${years.map(y=>`<fieldset class="export-month-year"><legend>${y}年</legend><div class="export-month-grid">${available.filter(m=>m.startsWith(y+'-')).map(m=>`<label class="export-check"><input type="checkbox" name="export-month" value="${m}" aria-label="${y}年${Number(m.slice(5))}月" ${maintenance.has(m)?'checked':''}><span>${Number(m.slice(5))}月</span></label>`).join('')}</div></fieldset>`).join('')}</div><p id="export-selection" class="export-selection" role="status"></p><p class="form-help">品牌、车型、版本及月份的排版与维护表一致；12月后附全年计划量。空白与0分别保留，合计无需填写。可按需增加锁单行或调整导出月份。</p><div class="dialog-actions">${button('取消','close-dialog')}<button type="submit" class="button primary">导出维护模板</button></div></form>`);
+  openDialog(`<form id="export-plan-form"><h2>导出SOP计划</h2><p id="export-scope" class="subtitle"></p><p class="form-help">代际范围与页面一致：${generationModeLabel()}。排版与维护输入表一致，包含完整计划周期和版本明细。问界选项默认跟随页面显示，可单独调整。汇总代际计划自动相加、只读；可维护的单代际行修改后可通过“导入Excel”同步。</p><div id="export-error" class="inline-error" role="alert"></div><fieldset class="export-content-options"><legend>导出内容</legend><label class="export-check"><input type="checkbox" id="export-wenjie" checked><span>包含问界</span></label><label class="export-check"><input type="checkbox" id="export-locks"><span>增加锁单行</span></label><label class="export-check"><input type="checkbox" id="export-versions" checked><span>${generationMode()==='summary'?'包含版本明细（汇总代际只读）':'包含版本明细（可填写、可导回）'}</span></label>${hasFilter?'<label class="export-check"><input type="checkbox" id="export-filtered"><span>仅导出当前筛选</span></label>':''}</fieldset><p class="form-help">取消版本明细后仅导出只读车型汇总，不能回填计划。不含问界的版本表仍可导回，问界已有数据不变。</p><div class="export-month-heading"><h3>导出月份</h3><div class="toolbar"><button type="button" class="button ghost small" data-export-preset="maintenance">恢复维护表格式</button><button type="button" class="button ghost small" data-export-months="current">当前视图</button><button type="button" class="button ghost small" data-export-months="all">全部月份</button><button type="button" class="button ghost small" data-export-months="none">清空</button></div></div><div class="export-month-list">${years.map(y=>`<fieldset class="export-month-year"><legend>${y}年</legend><div class="export-month-grid">${available.filter(m=>m.startsWith(y+'-')).map(m=>`<label class="export-check"><input type="checkbox" name="export-month" value="${m}" aria-label="${y}年${Number(m.slice(5))}月" ${maintenance.has(m)?'checked':''}><span>${Number(m.slice(5))}月</span></label>`).join('')}</div></fieldset>`).join('')}</div><p id="export-selection" class="export-selection" role="status"></p><p class="form-help">品牌、车型、版本及月份的排版与维护表一致；12月后附全年计划量。空白与0分别保留，合计无需填写。可按需增加锁单行或调整导出月份。</p><div class="dialog-actions">${button('取消','close-dialog')}<button type="submit" class="button primary">导出维护模板</button></div></form>`);
   const form=$('#export-plan-form'),monthInputs=$$('input[name="export-month"]',form),save=$('button[type="submit"]',form);
   const versionOption=$('#export-versions',form),lockOption=$('#export-locks',form),wenjieOption=$('#export-wenjie',form),filterOption=$('#export-filtered',form);
   const reset=()=>{
@@ -579,8 +631,9 @@ function matchingChart(d) {
   const x=i=>45+i*70,y=v=>height-30-v/max*(height-55);
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="14周SOP计划与实际发货对照"><line x1="30" x2="980" y1="150" y2="150" stroke="#dae2eb"/>${d.actual!=null?`<line x1="30" x2="980" y1="${y(d.actual)}" y2="${y(d.actual)}" stroke="#c58c26" stroke-width="2" stroke-dasharray="6 5"/><text x="970" y="${Math.max(12,y(d.actual)-8)}" text-anchor="end" fill="#93651b" font-size="12">发货 ${fmt(d.actual)}</text>`:''}${d.rows.map((r,i)=>`${r.plan!=null?`<rect x="${x(i)}" y="${y(r.plan)}" width="30" height="${150-y(r.plan)}" fill="#2d6c99" rx="3"><title>W${r.week}：${r.plan}辆</title></rect>`:''}<text x="${x(i)+15}" y="173" text-anchor="middle" fill="#64748b" font-size="12">W${r.week}</text>`).join('')}</svg>`;
 }
-function editShipments(id=matchProduct||products()[0]?.id) {
-  const p=state.products.find(p=>p.id===id);if(!p)return toast('当前筛选没有版本',true);
+function editShipments(id=matchProduct||products().find(p=>!p.read_only)?.id) {
+  const p=state.products.find(p=>p.id===id);if(!p)return toast('当前筛选没有可维护版本，请切换至单代际',true);
+  if(p.read_only)return toast('汇总代际只读，请切换至单代际维护',true);
   const r=shipmentIndex.get(key(id,matchMonth))||{};
   openDialog(`<form id="shipment-form"><div class="eyebrow">ACTUAL SHIPMENTS</div><h2>维护实际发货量</h2><p class="subtitle">填写SP或IoC的月度实绩，销量统计不会自动代入。</p><div class="form-grid"><label class="field full">版本<select id="ship-product">${editorOptions(id,products())}</select></label><label class="field">考核月份<input id="ship-month" type="month" value="${matchMonth}" required></label><label class="field">实际发货量（辆）<input id="ship-quantity" type="number" min="0" step="1" value="${r.quantity??''}" required></label><label class="field">来源<select id="ship-source">${['SP','IoC'].map(s=>opt(s,s,r.source||'SP')).join('')}</select></label><label class="field">结算状态<select id="ship-status">${[['pending','待结算'],['settled','已结算'],['corrected','已更正']].map(([v,l])=>opt(v,l,r.status||'pending')).join('')}</select></label><label class="field">维护人<input id="ship-owner" value="${esc(owner)}" required></label><label class="field">实绩批次<input id="ship-batch" value="${esc(r.batch||'')}" placeholder="如 SP-202609" required></label></div><div id="form-error" class="inline-error" role="alert"></div><div class="dialog-actions">${button('取消','close-dialog')}<button type="submit" class="button primary">保存实绩</button></div></form>`);
   const refill=()=>{const r=shipmentIndex.get(key($('#ship-product').value,$('#ship-month').value))||{};$('#ship-quantity').value=r.quantity??'';$('#ship-source').value=r.source||'SP';$('#ship-status').value=r.status||'pending';$('#ship-batch').value=r.batch||''};
@@ -598,6 +651,7 @@ function dataPage() {
 async function renderPage() {
   $('#page-title').textContent=titles[page];
   $$('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===page);b.setAttribute('aria-current',b.dataset.page===page?'page':'false');});
+  if(generationViewError&&page!=='history')return showGenerationError(generationViewError);
   if(page==='planning')planning();else if(page==='history')await historyPage();else if(page==='matching')await matchingPage();else dataPage();
 }
 async function handleAction(action,el) {
@@ -661,6 +715,21 @@ async function handleAction(action,el) {
   }
   if(action==='export-match') {const d=window.currentMatching;return exportCSV(`匹配率_${matchMonth}.csv`,['提前周次','业务日期','SOP计划','实际发货','匹配率%','权重','贡献百分点','状态'],d.rows.map(r=>[r.week,r.business_date,r.plan,r.actual,r.match,r.weight,r.contribution,statusText(r.status)]));}
 }
+async function pollWorkbookStatus() {
+  if(!state||document.hidden||$('#edit-dialog').open||generationSwitchPending)return;
+  try {
+    const sync=await api('/api/plan-workbook/status'),previous=state.workbook_sync||{},view=sync.generation_view;
+    if(view?.error) {
+      state.generation_view=view;
+      showGenerationError(view.error);
+      return;
+    }
+    if(generationViewError||generationStatusChanged(view)||sync.last_sync!==previous.last_sync||sync.status!==previous.status||sync.message!==previous.message||JSON.stringify(sync.source_refresh||{})!==JSON.stringify(state.source_refresh||{})) {
+      const scrolls=$$('.table-scroll').map(el=>({left:el.scrollLeft,top:el.scrollTop}));
+      await load();$$('.table-scroll').forEach((el,i)=>{if(scrolls[i]){el.scrollLeft=scrolls[i].left;el.scrollTop=scrolls[i].top;}});
+    }
+  } catch { /* Manual refresh reports connection errors; the next poll retries. */ }
+}
 document.addEventListener('click',async e=>{
   const el=e.target.closest('button');if(!el)return;
   try {
@@ -680,6 +749,7 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('change',async e=>{
   try {
+    if(e.target.id==='generation-filter'){await changeGenerationMode(e.target.value,e.target);return;}
     if(e.target.id==='range-filter'){range=e.target.value==='annual'?'annual':'rolling';planning();}
     if(e.target.id==='year-filter'){selectPlanYear(e.target.value);planning();}
     if(e.target.id==='brand-filter'){brand=e.target.value;model='';matchProduct='';query='';selected=null;planning();}
@@ -701,13 +771,5 @@ $('#refresh-btn')?.addEventListener('click',async()=>{try{await load();toast('�
 window.addEventListener('unhandledrejection',e=>toast(e.reason?.message||'加载失败，请重试',true));
 load().catch(err=>{$('#app').innerHTML=`<div class="empty-state"><h1>暂时无法连接数据服务</h1><p>${esc(err.message)}</p><p>请使用项目中的启动脚本打开看板。</p></div>`;});
 
-// Refresh only after a completed spreadsheet synchronization; preserve dialogs and scrolling.
-setInterval(async()=>{
-  if(!state||document.hidden||$('#edit-dialog').open)return;
-  try{const sync=await api('/api/plan-workbook/status');const previous=state.workbook_sync||{};
-    if(sync.last_sync!==previous.last_sync||sync.status!==previous.status||sync.message!==previous.message||JSON.stringify(sync.source_refresh||{})!==JSON.stringify(state.source_refresh||{})){
-      const scrolls=$$('.table-scroll').map(el=>({left:el.scrollLeft,top:el.scrollTop}));
-      await load();$$('.table-scroll').forEach((el,i)=>{if(scrolls[i]){el.scrollLeft=scrolls[i].left;el.scrollTop=scrolls[i].top;}});
-    }
-  }catch(e){/* The next scheduled check retries; manual refresh shows connection errors. */}
-},8000);
+// Rule changes also refresh an absent maintenance workbook's current view.
+setInterval(pollWorkbookStatus,8000);

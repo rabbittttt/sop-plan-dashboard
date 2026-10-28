@@ -16,9 +16,10 @@ export function planPeriod(months) {
   return months[0] === months.at(-1) ? months[0] : `${months[0]}—${months.at(-1)}`;
 }
 
-export function planGuidance(includeLocks = false) {
+export function planGuidance(includeLocks = false, hasReadonly = false) {
   return '单位：辆。只填版本月计划量；可在主表新增、删除行或修改名称，删除表示停用并保留历史。合计自动计算。'
-    + (includeLocks ? '锁单行无需填写。' : '');
+    + (includeLocks ? '锁单行无需填写。' : '')
+    + (hasReadonly ? '汇总代际由成员计划自动相加，只读；请切换单代际修改。' : '');
 }
 
 // This function never writes user text. Call the adapter's safe text writer for

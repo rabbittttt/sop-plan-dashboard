@@ -22,9 +22,10 @@ RED = "B62025"
 GRID = Border(*(Side(style="thin", color="8498AA") for _ in range(4)))
 
 
-def plan_guidance(include_locks=False):
+def plan_guidance(include_locks=False, has_readonly=False):
     return ("单位：辆。只填版本月计划量；可在主表新增、删除行或修改名称，删除表示停用并保留历史。合计自动计算。"
-            + ("锁单行无需填写。" if include_locks else ""))
+            + ("锁单行无需填写。" if include_locks else "")
+            + ("汇总代际由成员计划自动相加，只读；请切换单代际修改。" if has_readonly else ""))
 
 
 def _fill(color):

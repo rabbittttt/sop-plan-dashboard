@@ -20,6 +20,7 @@ from sop_workbook import WorkbookSync
 from sop_backup import SnapshotBackup
 from sop_export import ExportError, MAX_REQUEST_BYTES, PlanExport
 from sop_refresh import SalesRefresh
+from sop_source_rules import MergeRuleError
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("sop")
@@ -98,7 +99,7 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
             if isinstance(error, ConflictError):
                 self._json({"error": str(error), "conflicts": error.conflicts,
                             **({"source": error.source} if getattr(error, "source", None) else {})}, 409)
-            elif isinstance(error, ValidationError):
+            elif isinstance(error, (ValidationError, MergeRuleError)):
                 self._json({"error": str(error)}, 400)
             elif isinstance(error, ExportError):
                 self._json({"error": str(error)}, error.status)
@@ -127,7 +128,12 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                 elif path == "/api/products":
                     self._json(store.list_products())
                 elif path == "/api/plan-workbook/status" and workbook_sync:
-                    self._json({**workbook_sync.status(), "source_refresh": source_refresh.status()})
+                    try:
+                        generation_view = store.generation_view()
+                    except (ValidationError, MergeRuleError) as error:
+                        generation_view = {"error": str(error)}
+                    self._json({**workbook_sync.status(), "source_refresh": source_refresh.status(),
+                                "generation_view": generation_view})
                 elif path == "/api/plan-workbook/download" and workbook_sync:
                     result = workbook_sync.sync(force_export=not workbook_sync.path.is_file())
                     if result["status"] in {"conflict", "error", "pending"}:
@@ -267,9 +273,20 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                 elif path == "/api/shipments":
                     result = store.save_shipments(body)
                 elif path == "/api/settings":
-                    result = store.update_settings(body)
-                    if workbook_sync:
-                        result["workbook_sync"] = workbook_sync.sync()
+                    if "generation_mode" in body and workbook_sync:
+                        # Accept saved edits using the old view before replacing
+                        # its rows. A conflict must leave the selected mode intact.
+                        with workbook_sync.lock:
+                            before = workbook_sync.sync()
+                            if before["status"] in {"error", "conflict"} or not workbook_sync._input_checked:
+                                self._json({"error": before["message"], "workbook_sync": before}, 409)
+                                return
+                            result = store.update_settings(body)
+                            result["workbook_sync"] = workbook_sync.sync()
+                    else:
+                        result = store.update_settings(body)
+                        if workbook_sync:
+                            result["workbook_sync"] = workbook_sync.sync()
                 elif path == "/api/snapshots":
                     if workbook_sync:
                         sync_state = workbook_sync.sync()

@@ -21,7 +21,6 @@ import sys
 import openpyxl
 
 from sop_paths import sales_source_files
-from sop_source_rules import exclude_summary_sources, is_summary_generation
 
 
 ROOT = Path(__file__).resolve().parent
@@ -115,7 +114,7 @@ def _option_consistency(source_dir):
     controls = {}
     try:
         for sheet in workbook.worksheets:
-            if not sheet.title.endswith("by月") or is_summary_generation(sheet.title[:-3]):
+            if not sheet.title.endswith("by月"):
                 continue
             rows = list(sheet.iter_rows(max_row=3, values_only=True))
             if len(rows) < 3 or not rows[0] or rows[0][0] != "指标":
@@ -172,8 +171,6 @@ def _extract_generation_reference(source_dir=None, *, as_of=None):
             if row.get("项目") == "数据判定日期":
                 source_declared_date = _date(row.get("内容"))
         for row_number, row in _table(workbook, "车型基本信息", ["代际名", "二级代际名", "品牌"]):
-            if is_summary_generation(row["代际名"]):
-                continue
             product = _product(row["代际名"], row["二级代际名"], row["品牌"])
             product.update({
                 "launch_date": _date(row.get("首销开始")).isoformat() if _date(row.get("首销开始")) else None,
@@ -186,9 +183,6 @@ def _extract_generation_reference(source_dir=None, *, as_of=None):
             info[product["id"]] = (row_number, row)
         required = ["代际名", "二级代际名", "日期", "日期状态"] + [m["source_column"] for m in METRICS]
         for row_number, row in _table(workbook, DAILY_SHEET, required):
-            if is_summary_generation(row["代际名"]):
-                exclusions["汇总代际"] += 1
-                continue
             dt = _date(row["日期"])
             if dt is None:
                 exclusions["日期无效"] += 1
@@ -360,7 +354,7 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
         workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
         try:
             for sheet in workbook.worksheets:
-                if not sheet.title.endswith("by月") or " " not in sheet.title or is_summary_generation(sheet.title[:-3]):
+                if not sheet.title.endswith("by月") or " " not in sheet.title:
                     continue
                 rows = list(sheet.iter_rows(values_only=True))
                 if not rows or tuple(rows[0][:3]) != ("指标", "统计类型", "分类"):
@@ -465,7 +459,7 @@ def _extract_version_reference(source_dir=None, *, as_of=None):
                  "unit": "单", "product_grain": "年款内具体配置版本", "brands": ["问界", "智界", "享界", "尊界", "尚界"],
                  "notes": [
                      "真实版本：仅从车型by月表中“版本/数量”块提取，不把年款或二级代际冒充配置版本。",
-                     "代际名以“汇总”结尾的来源不进入产品目录、锁单及计划合计。",
+                     "原始来源完整保留；当前展示按共享 MERGE_GROUPS 规则选择单代际或派生汇总代际，合计不混用两层数据。",
                      "不同年款独立；品牌、车型、版本逐级汇总，但不叠加原品牌总计、车型总计及其他选配维度。",
                      "大定选配表版本数量按净大定参考；锁单选配表版本数量与交车锁单总行分别读取，不要求合计相等。",
                      "月表最后一列“总计”部分行实际等于最后一个月，未作为跨月总计使用。",
@@ -507,7 +501,7 @@ def _model_monthly_locks(source_dir, *, as_of=None):
     result = []
     try:
         for sheet in workbook:
-            if not sheet.title.endswith("by月") or " " not in sheet.title or is_summary_generation(sheet.title[:-3]):
+            if not sheet.title.endswith("by月") or " " not in sheet.title:
                 continue
             rows = list(sheet.iter_rows(values_only=True))
             if not rows or tuple(rows[0][:3]) != ("指标", "统计类型", "分类"):
@@ -539,8 +533,6 @@ def _model_monthly_locks(source_dir, *, as_of=None):
 
 def _build_lock_data(version_data, model_sales, basis):
     """Keep version detail and model lock totals at their separate source grains."""
-    version_data = exclude_summary_sources(version_data)
-    model_sales = [row for row in model_sales if not is_summary_generation(row.get("generation"))]
     if basis not in LOCK_BASIS_OPTIONS:
         raise ValueError("无效的版本锁单口径")
     confirmed = basis == "source_version_quantity"
@@ -652,7 +644,9 @@ def extract(source_dir=None, *, as_of=None, version_lock_basis=None):
     basis = _resolve_lock_basis(version_lock_basis)
     version_data = _extract_version_reference(source_dir, as_of=as_of)
     models = _model_monthly_locks(source_dir, as_of=as_of)
-    return _build_lock_data(version_data, models, basis)
+    result = _build_lock_data(version_data, models, basis)
+    result["meta"]["source_schema_version"] = 2
+    return result
 
 
 def refresh(source_dir=None, output_path=None, *, as_of=None, version_lock_basis=None):

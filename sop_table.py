@@ -159,6 +159,8 @@ def parse_inline_sheet(sheet, manifest):
                 raise ValidationError(f"第 {number} 行请完整填写品牌、车型和版本；减少版本请删除整条明细行。")
             parsed_labels[field] = normalized
         candidate = {"number": number, "row": row, "labels": parsed_labels}
+        if original is not None and products[pid].get("read_only") and catalog_name_key(parsed_labels) != catalog_name_key(products[pid]):
+            raise ValidationError(f"第 {number} 行是自动汇总代际，名称只读；请切换单代际维护。")
         if original is None:
             matches = original_names.get(catalog_name_key(parsed_labels), [])
             if len(matches) > 1:
@@ -191,6 +193,8 @@ def parse_inline_sheet(sheet, manifest):
         baseline = {field: product.get(field) for field in ("brand", "model", "version", "active", "revision")}
         baseline["active"] = product.get("active", True)
         if candidate is None:
+            if product.get("read_only"):
+                raise ValidationError("自动汇总代际行不能删除；请切换单代际维护或调整共享汇总规则。")
             catalog_values[pid] = {field: baseline[field] for field in ("brand", "model", "version", "active")}
             catalog_values[pid]["active"] = False
             if baseline["active"]:
@@ -201,9 +205,11 @@ def parse_inline_sheet(sheet, manifest):
         catalog_values[pid] = {**labels, "active": baseline["active"]}
         changes = {field: labels[field] for field in labels if labels[field] != baseline[field]}
         if changes:
+            if product.get("read_only"):
+                raise ValidationError("自动汇总代际名称只读；请切换单代际维护。")
             catalog_changes.append({"id": pid, "baseline": baseline, **changes})
         original = original_plans[pid]
-        allowed = set(manifest["editable_months_by_product"].get(pid, []))
+        allowed = set() if product.get("read_only") else set(manifest["editable_months_by_product"].get(pid, []))
         for col in month_columns:
             month, raw = col["month"], value(candidate["row"], col["column"])
             if month not in allowed:

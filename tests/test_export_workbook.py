@@ -1,8 +1,10 @@
 """Exercise the real Excel download writer using disposable, synthetic records."""
 import copy
 import json
+import shutil
 import sqlite3
 import subprocess
+import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -37,21 +39,22 @@ def payload(locks=True, versions=True):
             "rows": rows, "annual_plans": [{"2026": r[6]} for r in records]}
 
 
-def generate(body, name, preview=False):
+def generate(body, name, preview=False, script="build_export_workbook.mjs"):
     request = {**body, "output_path": str(OUT / f"{name}.xlsx")}
     if preview:
         request["preview_path"] = str(OUT / f"{name}.png")
     (OUT / f"{name}.json").write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
-    result = subprocess.run([str(NODE), str(ROOT / "scripts/build_export_workbook.mjs")],
+    result = subprocess.run([str(NODE), str(ROOT / "scripts" / script)],
                             input=json.dumps(request, ensure_ascii=False), text=True, encoding="utf-8",
                             capture_output=True, cwd=ROOT, timeout=120)
     (OUT / f"{name}.log").write_text(result.stderr, encoding="utf-8")
     return result, request["output_path"]
 
 
-def actual_input_payload():
-    """Read the real maintenance template; do not manufacture a lookalike baseline."""
-    path = ROOT / "input_file/SOP计划维护.xlsx"
+def actual_input_payload(root=None):
+    """Read a maintenance workbook and the immutable context that authored it."""
+    root = ROOT if root is None else Path(root)
+    path = root / "input_file/SOP计划维护.xlsx"
     book = openpyxl.load_workbook(path, data_only=False)
     source = book["SOP计划"]
     cached = openpyxl.load_workbook(path, data_only=True)["SOP计划"]
@@ -96,7 +99,7 @@ def actual_input_payload():
     if metadata.get("schema_version") == 5:
         # Read the immutable source context that authored this exact real template.
         # A later schema must be compared with its matching writer contract.
-        with closing(sqlite3.connect((ROOT / "data/sop.sqlite3").as_uri() + "?mode=ro", uri=True)) as db:
+        with closing(sqlite3.connect((root / "data/sop.sqlite3").as_uri() + "?mode=ro", uri=True)) as db:
             saved = db.execute("SELECT payload FROM workbook_exports WHERE token=?", (metadata["token"],)).fetchone()
         expected = json.loads(saved[0])
         spec = expected["layout"]["sheets"][0]
@@ -106,6 +109,33 @@ def actual_input_payload():
             "manual_editable_months": spec["manual_editable_months"],
             "plan_revisions_by_product": spec["plan_revisions_by_product"]}
     return body, source, visible_last
+
+
+def current_input_payload(name):
+    """Use the current maintenance writer as the independent export baseline.
+
+    The user's existing workbook can legitimately predate a brand-order or style
+    update. Tests must exercise the current input/export contract without reading
+    local business data or rewriting that workbook to make a test pass.
+    """
+    from tests.test_inline_renderer import input_payload
+
+    with tempfile.TemporaryDirectory(prefix="sop-renderer-reference-") as temporary:
+        root = Path(temporary)
+        (root / "input_file").mkdir()
+        (root / "data").mkdir()
+        context = input_payload()
+        path = root / "input_file/SOP计划维护.xlsx"
+        result, reference = generate(context, name, script="build_plan_workbook.mjs")
+        if result.returncode:
+            raise AssertionError(result.stderr)
+        shutil.copy2(reference, path)
+        with closing(sqlite3.connect(root / "data/sop.sqlite3")) as db, db:
+            db.execute("CREATE TABLE workbook_exports (token TEXT, payload TEXT)")
+            db.execute("INSERT INTO workbook_exports VALUES (?,?)",
+                       (context["token"], json.dumps(context, ensure_ascii=False)))
+        body, source, width = actual_input_payload(root)
+        return body, source, width, Path(reference)
 
 
 @unittest.skipUnless(NODE.is_file(), "Bundled spreadsheet runtime unavailable")
@@ -120,7 +150,7 @@ class ExportWorkbookTest(unittest.TestCase):
             if result.returncode:
                 raise AssertionError(result.stderr)
             cls.outputs[(locks, versions)] = Path(path)
-        body, cls.reference, cls.visible_last = actual_input_payload()
+        body, cls.reference, cls.visible_last, cls.reference_path = current_input_payload("export-input-reference")
         cls.inline = body.get("roundtrip", {}).get("inline_schema") == 2
         result, path = generate(body, "actual-input-parity", preview=True)
         if result.returncode:
@@ -128,7 +158,7 @@ class ExportWorkbookTest(unittest.TestCase):
         cls.parity_path = Path(path)
 
     def test_full_plan_export_is_visibly_identical_to_actual_input(self):
-        """Compare the entire real template, not a few matching blue swatches."""
+        """Compare the complete current maintenance grid, including its formulas."""
         expected = self.reference
         actual_book = openpyxl.load_workbook(self.parity_path, data_only=False)
         self.assertEqual(actual_book.sheetnames, ["SOP计划", "_sop_import"] if self.inline else ["SOP计划"])
@@ -163,7 +193,7 @@ class ExportWorkbookTest(unittest.TestCase):
             self.assertTrue(all(c.protection.locked for row in actual for c in row), "Legacy export is a read-only copy")
 
     def test_all_option_combinations_keep_values_style_and_formula_totals(self):
-        reference = openpyxl.load_workbook(ROOT / "input_file/SOP计划维护.xlsx", data_only=False)["SOP计划"]
+        reference = self.reference
         for (locks, versions), path in self.outputs.items():
             with self.subTest(locks=locks, versions=versions):
                 values = openpyxl.load_workbook(path, data_only=True)
@@ -236,25 +266,26 @@ class ExportWorkbookTest(unittest.TestCase):
         self.assertIn("safe integer", result.stderr)
 
     def test_artifact_recalculation_and_reference_render(self):
-        # Inspect the actual template and verify a changed source summary updates
-        # derived brand/grand totals in memory. No production workbook is edited.
+        # Inspect the generated maintenance template and verify a changed source
+        # summary updates derived brand/grand totals in memory.
         script = r'''
 import fs from 'node:fs/promises';
 import {FileBlob,SpreadsheetFile} from '@oai/artifact-tool';
-const root=process.argv[1], out=process.argv[2];
-const template=await SpreadsheetFile.importXlsx(await FileBlob.load(root+'/input_file/SOP计划维护.xlsx'));
+const reference=process.argv[1], out=process.argv[2];
+const template=await SpreadsheetFile.importXlsx(await FileBlob.load(reference));
 console.log((await template.inspect({kind:'region',sheetId:'SOP计划',range:'A3:P8',maxChars:1500,tableMaxRows:6,tableMaxCols:16})).ndjson);
 const preview=await template.render({sheetName:'SOP计划',range:'A1:AC13',scale:1.2,format:'png'});
 await fs.writeFile(out+'/reference.png',new Uint8Array(await preview.arrayBuffer()));
 const wb=await SpreadsheetFile.importXlsx(await FileBlob.load(out+'/locks-0-versions-0.xlsx'));
 const s=wb.worksheets.getItemAt(0), grid=s.getUsedRange().values;
-const modelRow=grid.findIndex(row=>row[1]==='M5 合计')+1, totalRow=grid.findIndex(row=>row[0]==='总计')+1;
+const modelRow=grid.findIndex(row=>row[0]==='问界'&&row[1]==='M5 合计')+1, totalRow=grid.findIndex(row=>row[0]==='总计')+1;
+if(modelRow<1)throw new Error('The selected 问界 M5 summary is missing');
 s.getRange(`C${modelRow}`).values=[[77]];
 wb.recalculate();
 if(s.getRange(`C${totalRow}`).values[0][0]!==82)throw new Error('Grand total failed to recalculate from model summary');
 console.log((await wb.inspect({kind:'formula',sheetId:s.name,range:`A${totalRow}:H${totalRow}`,maxChars:1000})).ndjson);
 '''
-        result = subprocess.run([str(NODE), "--input-type=module", "-e", script, str(ROOT), str(OUT)],
+        result = subprocess.run([str(NODE), "--input-type=module", "-e", script, str(self.reference_path), str(OUT)],
                                 cwd=ROOT / "scripts", capture_output=True, text=True, encoding="utf-8", timeout=120)
         (OUT / "reference-and-recalc.log").write_text(result.stdout + result.stderr, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)

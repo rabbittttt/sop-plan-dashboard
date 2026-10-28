@@ -97,7 +97,7 @@ def write_plan_workbook(payload: dict) -> None:
                          header_row=spec["header_row"], first_data_row=spec["first_data_row"])
         _literal(sheet.cell(1, 1), "SOP计划")
         _literal(sheet.cell(1, 4), f"{payload['months'][0]}—{payload['months'][-1]}")
-        _literal(sheet.cell(2, 1), plan_guidance())
+        _literal(sheet.cell(2, 1), plan_guidance(has_readonly=any(p.get("read_only") for p in payload["products"])))
         for offset, header in enumerate(spec["headers"]):
             for column, value in enumerate(header, 1):
                 if value is not None:
@@ -126,7 +126,7 @@ def write_plan_workbook(payload: dict) -> None:
             if item["kind"] == "product":
                 _literal(sheet.cell(row, spec["product_column"]), item["product_id"])
                 for column in range(1, 4):
-                    sheet.cell(row, column).protection = Protection(locked=False)
+                    sheet.cell(row, column).protection = Protection(locked=bool(item.get("read_only")))
                 for month in month_columns:
                     address = f"{get_column_letter(month['column'])}{row}"
                     mapping = mappings.get(address)

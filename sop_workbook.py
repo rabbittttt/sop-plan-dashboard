@@ -155,6 +155,7 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
                 label = version + ("（停用）" if not active else "")
                 rows.append({"row": index, "kind": "product", "product_id": product["id"],
                              "brand": brand, "model": model, "version": version, "active": active,
+                             "read_only": bool(product.get("read_only")),
                              "label_a": brand if index == brand_start else None,
                              "label_b": model if index == start else None, "label_c": label or None})
                 for col in columns:
@@ -167,7 +168,7 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
                         cells.append({"product_id": product["id"], "month": month, "sheet": name,
                                       "cell": f"{_column(col['column'])}{index}",
                                       "applicable": applicable,
-                                      "editable": applicable and month in editable and (active or month < current_month)})
+                                      "editable": not product.get("read_only") and applicable and month in editable and (active or month < current_month)})
                 for year in years:
                     ref = f"{_column(year['first_column'])}{index}:{_column(year['last_month_column'])}{index}"
                     formulas[f"{_column(year['last_column'])}{index}"] = f'=IF(COUNT({ref})=0,"",SUM({ref}))'
@@ -351,9 +352,8 @@ class WorkbookSync:
         sales = self.store.read_sales()
         current = self.store.clock().astimezone(TZ).strftime("%Y-%m")
         products = sales["products"]
-        product_ids = {product["id"] for product in products}
         plan_end = horizon(current, self.store.settings()["bridge_m6"])
-        plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.db.execute("SELECT * FROM plans") if r["product_id"] in product_ids}
+        plans = {(r["product_id"], r["month"]): dict(r) for r in self.store.view_plans(sales)}
         business_months = sorted(set(month_range(current, plan_end))
                         | {month_add(current, offset) for offset in (-3, -2, -1)}
                         | {r["month"] for r in sales["sales"]}
@@ -369,6 +369,7 @@ class WorkbookSync:
                           "current_month": current, "business_months": business_months,
                           "schema_version": SCHEMA_VERSION, "layout_version": LAYOUT_VERSION,
                           "presentation_version": PRESENTATION_VERSION,
+                          "generation_view": sales.get("generation_view", {}),
                           "layout": _inline_layout(products, months, editable_months, current, plans)}
         signature = _signature(signature_data)
         return {**signature_data, "plans": list(plans.values())}, signature
@@ -384,13 +385,17 @@ class WorkbookSync:
         current = {p["id"] for p in self.store.read_sales(include_excluded=True)["products"]}
         aliases = self.store.source_aliases() if hasattr(self.store, "source_aliases") else {}
         removed = {p["id"] for p in expected["products"]} - current
+        # A derived row belongs to the trusted export, not to the persistent
+        # catalog. Its cells and identity were validated as read-only above.
+        readonly = {p["id"] for p in expected["products"] if p.get("read_only")}
+        removed -= readonly
         for pid in removed:
             if aliases.get(pid) not in current:
                 raise ValidationError("计划表包含已不在产品目录中的版本，已停止导入。")
             keys = [key for key, base in baseline.items() if base["product_id"] == pid]
             if any(baseline[key]["baseline_sop"] is not None or accepted.get(key) is not None or values.get(key) is not None for key in keys):
                 raise ValidationError("已关联来源的旧版本行中存在计划值或未同步修改（含0），为避免丢失已停止更新，请先核对处理。")
-        return {key: value for key, value in values.items() if baseline[key]["product_id"] not in removed}
+        return {key: value for key, value in values.items() if baseline[key]["product_id"] not in removed | readonly}
 
     def _parse(self, content):
         import openpyxl

@@ -56,7 +56,7 @@ def _period(months):
 def _subtitle(data, inline):
     if inline:
         if data["include_versions"]:
-            return plan_guidance(data["include_locks"])
+            return plan_guidance(data["include_locks"], any(p.get("read_only") for p in data.get("roundtrip", {}).get("products", [])))
         return "单位：辆。当前为车型汇总，回填计划请导出版本明细。年度合计为全年SOP计划量。"
     if data.get("roundtrip"):
         return "单位：辆。空白表示未填写，0表示明确不安排。年度合计为全年SOP；锁单行只读。"
@@ -340,7 +340,7 @@ def write_export_workbook(payload: dict) -> None:
                 sheet.row_dimensions[number].hidden = True
             if data["include_versions"] and row["kind"] == "product" and row["metric"] == "SOP计划量":
                 for column in range(1, 4):
-                    sheet.cell(number, column).protection = Protection(locked=False)
+                    sheet.cell(number, column).protection = Protection(locked=bool(product and product.get("read_only")))
     # An empty dataValidations container is invalid SpreadsheetML. Summary
     # downloads and versions with no editable months must omit it entirely.
     if validation.sqref:

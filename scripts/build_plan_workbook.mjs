@@ -59,7 +59,7 @@ async function main() {
     sheet.getRange(`${column(spec.product_column)}:${last}`).format.columnWidth = 24;
     write(sheet, 1, 1, [[planTitle()]]);
     write(sheet, 1, 4, [[planPeriod(data.months)]]);
-    write(sheet, 2, 1, [[inline?planGuidance():'单位：辆。空白表示未填写，0表示明确不安排。历史月灰底，可修正；深灰格只读。“未适用”无需填0。新增车型/版本在表底填写，保存后自动并入目录。']]);
+    write(sheet, 2, 1, [[inline?planGuidance(false,data.products.some(p=>p.read_only)):'单位：辆。空白表示未填写，0表示明确不安排。历史月灰底，可修正；深灰格只读。“未适用”无需填0。新增车型/版本在表底填写，保存后自动并入目录。']]);
     write(sheet, spec.header_row, 1, spec.headers);
     if (spec.manual_section) {
       const section = spec.manual_section;
@@ -73,7 +73,7 @@ async function main() {
       values[spec.kind_column-1] = item.kind;
       if (inline) values[spec.key_column-1] = item.key;
       if (item.kind === 'product') {
-        if (inline) unlocked[spec.name].push(`A${r}`,`B${r}`,`C${r}`);
+        if (inline && !item.read_only) unlocked[spec.name].push(`A${r}`,`B${r}`,`C${r}`);
         values[spec.product_column-1] = item.product_id;
         for (const col of spec.columns.filter(c=>c.kind==='month')) {
           const address = `${column(col.column)}${r}`;

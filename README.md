@@ -13,6 +13,8 @@
 
 **Excel 运行依赖：** 安装 `requirements.txt` 后，维护表、网页导出和快照备份都可由 Python 独立生成，适用于没有 Codex 运行环境的内网机器。若本机已有 `@oai/artifact-tool`，程序仍可使用 Node 生成；该包缺失或 Node 无法启动时自动转用 Python。设置 `SOP_EXCEL_ENGINE=python` 可直接使用 Python 生成。`scripts/node_modules` 是可自动重建的本机链接，不提交到 Git。
 
+**共享代际规则：** 将“计划看板”和“订单分析”放在同级目录，保留 `../订单分析/scripts/config/shared_config.py` 的 `MERGE_GROUPS` 字典。看板每次读取此相对路径，不硬编码车型映射；规则修改后刷新即生效。页面可切换单代际与汇总代际，汇总计划自动相加、只读，未参与汇总的车型仍可维护。规则缺失或无效时会明确报错，不能同时展示两层数量。该外部配置由“订单分析”项目维护，不复制进本仓库。
+
 ## 目录
 
 | 路径 | 用途 | 提交到 Git |

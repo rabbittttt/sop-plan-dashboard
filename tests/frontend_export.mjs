@@ -258,7 +258,7 @@ assert.match(requests[0].options.headers['Content-Type'], /application\/json/);
 const sent = JSON.parse(requests[0].options.body);
 assert.deepEqual(sent, {
   schema_version:1, current_month:'2026-10', months:['2026-01','2026-02'],
-  include_locks:false, include_versions:false, scope:'全部品牌 · 全部车型',
+  include_locks:false, include_versions:false, scope:'全部品牌 · 全部车型 · 单代际',
   headers:downloaded.headers, rows:downloaded.rows, annual_plans:downloaded.annualPlans,
   row_product_ids:downloaded.rowProductIds, selected_product_ids:downloaded.selectedProductIds,
 });
@@ -289,6 +289,15 @@ assert.match(hiddenBrandPayload.scope,/不含问界/);
 assert.equal(get('exportProducts(maintenanceExportOptions()).length'),5,'The full maintenance template retains hidden brands.');
 assert.equal(get('state.products.length'),5,'Visibility never removes a catalog record.');
 run('setWenjieVisibility(true)');
+
+// Download requests pin the displayed rule revision for server-side validation.
+run("state.generation_view={mode:'summary',rule_signature:'live-rule-revision'}");
+await getAsync("downloadPlanExport({allProducts:true,includeVersions:true,selectedMonths:['2026-01']})");
+const generationPayload=JSON.parse(requests.at(-1).options.body);
+assert.equal(generationPayload.generation_mode,'summary');
+assert.equal(generationPayload.generation_rule_signature,'live-rule-revision');
+assert.match(generationPayload.scope,/汇总代际/);
+run('delete state.generation_view');
 
 // Server errors must surface without a false success toast or a downloadable error document.
 const beforeErrors={events:downloadEvents.length,urls:objectURLs.length,messages:messages.length};

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import openpyxl
 
-from test_export_workbook import NODE, OUT, ROOT, actual_input_payload, generate, payload
+from tests.test_export_workbook import NODE, OUT, ROOT, current_input_payload, generate, payload
 
 
 def add_roundtrip(body):
@@ -52,7 +52,7 @@ class RoundtripRendererTest(unittest.TestCase):
         result, cls.editable_path = generate(cls.body, "roundtrip-editable", preview=True)
         if result.returncode:
             raise AssertionError(result.stderr)
-        body, cls.reference, cls.visible_last = actual_input_payload()
+        body, cls.reference, cls.visible_last, _ = current_input_payload("roundtrip-input-reference")
         cls.inline = body.get("roundtrip", {}).get("inline_schema") == 2
         result, cls.parity_path = generate(add_roundtrip(body), "roundtrip-input-parity")
         if result.returncode:
@@ -143,8 +143,9 @@ import {FileBlob,SpreadsheetFile} from '@oai/artifact-tool';
 const wb=await SpreadsheetFile.importXlsx(await FileBlob.load(process.argv[1]));
 const sheet=wb.worksheets.getItem('SOP计划'),meta=wb.worksheets.getItem('_sop_import');
 const entries=meta.getUsedRange().values.filter(r=>r[0]==='plan');
-const ids=[...new Set(entries.map(r=>r[1]))];
-const first=entries.filter(r=>r[1]===ids[0]), row=Number(first[0][3].match(/\d+/)[0]);
+const first=entries.filter(r=>r[1]===process.argv[3]);
+if(!first.length)throw new Error('The selected version has no editable mapping');
+const row=Number(first[0][3].match(/\d+/)[0]);
 sheet.getRange(first.find(r=>r[2]==='2026-08')[3]).values=[[25]];
 wb.recalculate();
 if(sheet.getRange('G'+row).values[0][0]!==315)throw new Error('Annual total did not change with visible month');
@@ -161,7 +162,7 @@ if(![null,undefined,''].includes(zs.getRange('G5').values[0][0]))throw new Error
 if(zs.getRange('G6').values[0][0]!==0)throw new Error('An offscreen explicit zero must remain zero');
 console.log('Partial annual input edits and offscreen totals verified');
 '''
-        result = subprocess.run([str(NODE), "--input-type=module", "-e", script, self.editable_path, self.zero_path],
+        result = subprocess.run([str(NODE), "--input-type=module", "-e", script, self.editable_path, self.zero_path, self.first_pid],
                                 cwd=ROOT / "scripts", capture_output=True, text=True, encoding="utf-8", timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr)
 
