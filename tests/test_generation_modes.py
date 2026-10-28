@@ -72,15 +72,17 @@ class GenerationModeTest(unittest.TestCase):
         state = self.store.state()
         self.assertNotEqual(state["generation_view"]["signature"], before)
         self.assertNotIn("sum", {p["id"] for p in state["products"]})
-        self.assertIn("a", {p["id"] for p in state["products"]})
+        self.assertNotIn("a", {p["id"] for p in state["products"]})
         virtual = next(p for p in state["products"] if p.get("read_only"))
-        self.assertEqual(virtual["member_product_ids"], ["b"])
+        self.assertEqual(set(virtual["member_product_ids"]), {"a", "b"})
         self.assertEqual(sum(row["value"] for row in state["model_sales"]), 305)
         self.rules.unlink()
         with self.assertRaises((MergeRuleError, ValidationError)):
             self.store.read_sales()
 
     def test_unknown_members_keep_missing_and_zero_distinct(self):
+        self.store.save_plans({"owner": "test", "changes": [{"product_id": "b", "month": "2026-10",
+                              "forecast": None, "sop": None, "revision": 1}]})
         self.groups = {"问界 新组 2026款汇总": ["问界 M5 2025款", "问界 未上市 2027款"]}
         self.write_rules()
         self.store.update_settings({"generation_mode": "summary"})

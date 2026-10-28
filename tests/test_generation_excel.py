@@ -65,6 +65,103 @@ class GenerationExcelTest(unittest.TestCase):
         service.register(path, context)
         return service, path, body
 
+    def beta_members(self):
+        """Older years, model-only manual rows and BETA share one display group."""
+        self.config.write_text("MERGE_GROUPS = {'享界 X4 2026款汇总': ['享界 S9 2026款', '享界 S9T 2026款']}\n", encoding="utf-8")
+        products = [
+            {"id": pid, "brand": "享界", "model": model, "version": "Max", "generation": generation}
+            for pid, model, generation in [
+                ("s9", "S9", "享界 S9 2024款"),
+                ("s9-beta", "S9 BETA", "享界 S9 BETA 2026款"),
+                ("s9t", "S9T", "享界 S9T 2026款"),
+                ("raw-x4", "X4", "享界 X4 2026款汇总")]]
+        source = self.root / "beta-sales.json"
+        source.write_text(json.dumps({"meta": {}, "products": products, "sales": [], "model_sales": []}), encoding="utf-8")
+        self.store = SOPStore(self.root / "beta.sqlite3", source, lambda: datetime(2026, 10, 28, 12, tzinfo=TZ))
+        self.addCleanup(self.store.close)
+        manual = self.store.save_products({"changes": [{"brand": "享界", "model": "S9", "version": "手工配置"}]})["items"][0]
+        self.manual_id = manual["id"]
+        self.store.save_plans({"owner": "test", "changes": [
+            {"product_id": pid, "month": "2026-10", "sop": value, "forecast": None, "revision": 0}
+            for pid, value in [("s9", 10), ("s9-beta", 4), ("s9t", 20), (self.manual_id, 6)]]})
+        self.path = self.root / "beta-maintenance.xlsx"
+        self.sync = WorkbookSync(self.store, self.path, writer=write_plan_workbook)
+
+    def test_beta_detail_maintenance_keeps_editable_ids_and_merged_model_labels(self):
+        self.beta_members()
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        spec = self.spec()
+        by_id = {p["id"]: p for p in spec["products"]}
+        self.assertEqual(set(by_id), {"s9", "s9-beta", "s9t", self.manual_id})
+        self.assertEqual(by_id["s9"]["source_generation"], "享界 S9 2024款")
+        self.assertEqual(by_id["s9-beta"]["model"], "S9")
+        self.assertEqual(by_id["s9-beta"]["source_generation"], "享界 S9 BETA 2026款")
+        self.assertFalse(by_id["s9-beta"].get("read_only"))
+        rows = {r["product_id"]: r["row"] for r in spec["rows"] if r["kind"] == "product"}
+        block = [rows[pid] for pid in ("s9", "s9-beta", self.manual_id)]
+        book = openpyxl.load_workbook(self.path)
+        sheet = book["SOP计划"]
+        for letter in ("A", "B"):
+            self.assertIn(f"{letter}{min(block)}:{letter}{max(block)}", set(map(str, sheet.merged_cells.ranges)))
+        for pid, row in rows.items():
+            self.assertEqual(sheet.cell(row, spec["product_column"]).value, pid)
+        self.assertFalse(sheet[f"M{rows['s9-beta']}"].protection.locked)
+        book.close()
+        edit_cell(self.path, f"M{rows['s9-beta']}", 9)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='s9-beta'").fetchone()[0], 9)
+        original = next(p for p in self.store.read_sales(include_excluded=True)["products"] if p["id"] == "s9-beta")
+        self.assertEqual(original["model"], "S9 BETA")
+        self.assertEqual(original["source_generation"], "享界 S9 BETA 2026款")
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 4)
+
+    def test_beta_and_manual_members_export_only_x4_and_old_detail_import_recalculates(self):
+        self.beta_members()
+        old_service, old_path, _ = self.download("beta-detail")
+        book = openpyxl.load_workbook(old_path)
+        old_spec = fixtures.manifest(book)
+        rows = {r["product_id"]: r["row"] for r in old_spec["rows"]
+                if r["kind"] == "product" and r.get("metric") == "SOP计划量"}
+        book.close()
+        self.summary()
+        summary = self.store.state()
+        self.assertEqual({p["model"] for p in summary["products"]}, {"X4"})
+        self.assertEqual({pid for p in summary["products"] for pid in p["member_product_ids"]},
+                         {"s9", "s9-beta", "s9t", self.manual_id})
+        self.assertTrue(all(p.get("read_only") for p in summary["products"]))
+        self.assertEqual(sum(p["sop"] for p in summary["plans"]), 40)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        self.assertEqual({p["model"] for p in self.spec()["products"]}, {"X4"})
+        service, path, _ = self.download("beta-summary")
+        book = openpyxl.load_workbook(path)
+        spec = fixtures.manifest(book)
+        self.assertEqual({p["model"] for p in spec["products"]}, {"X4"})
+        plan_rows = [r for r in spec["rows"] if r["kind"] == "product" and r.get("metric") == "SOP计划量"]
+        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 4).value for r in plan_rows), 40)
+        for row in plan_rows:
+            self.assertTrue(book["SOP计划"].cell(row["row"], 4).protection.locked)
+            self.assertEqual(book["SOP计划"].cell(row["row"], spec["product_column"]).value, row["product_id"])
+        book.close()
+        self.assertEqual(service.import_content(path.read_bytes())["imported"], 0)
+        edit_cell(old_path, f"D{rows['s9-beta']}", 9)
+        edit_cell(old_path, f"D{rows[self.manual_id]}", 7)
+        result = old_service.import_content(old_path.read_bytes())
+        self.assertEqual(result["imported"], 2)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["catalog_updated"], 0)
+        self.assertEqual(sum(p["sop"] for p in self.store.view_plans()), 46)
+        original = next(p for p in self.store.read_sales(include_excluded=True)["products"] if p["id"] == "s9")
+        self.assertEqual(original["source_generation"], "享界 S9 2024款")
+        self.assertEqual(self.store.db.execute("SELECT sop FROM plans WHERE product_id='s9'").fetchone()[0], 10)
+        self.assertEqual(self.sync.sync()["status"], "synced")
+        spec = self.spec()
+        book = openpyxl.load_workbook(self.path, data_only=True)
+        self.assertEqual(sum(book["SOP计划"].cell(r["row"], 13).value
+                             for r in spec["rows"] if r["kind"] == "product"), 46)
+        book.close()
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 4)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM plans WHERE product_id LIKE 'group_%'").fetchone()[0], 0)
+
     def test_maintenance_switches_views_preserving_pending_detail_edits(self):
         self.assertEqual(self.sync.sync()["status"], "synced")
         first = self.spec()

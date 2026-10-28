@@ -13,7 +13,7 @@ from pathlib import Path
 
 from sop_brand import brand_order_key
 from sop_source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
-                              _generations as source_generations)
+                              normalize_generation, _generations as source_generations)
 
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -308,8 +308,8 @@ class SOPStore:
 
     def _known_summary_names(self, rules=None):
         rules = rules or self._generation_rules()
-        members = {member for group in rules["groups"].values() for member in group}
-        known = {row[0] for row in self.db.execute("SELECT generation FROM generation_summary_history")}
+        members = {normalize_generation(member) for group in rules["groups"].values() for member in group}
+        known = {normalize_generation(row[0]) for row in self.db.execute("SELECT generation FROM generation_summary_history")}
         return summary_names(rules) | (known - members)
 
     def _remap_sales(self, data, aliases):
@@ -317,7 +317,7 @@ class SOPStore:
         known = self._known_summary_names() if aliases else set()
         excluded_aliases = {p["id"] for p in data.get("products", [])
                             if p["id"] in aliases and source_generations(p)
-                            and all(g in known for g in source_generations(p))}
+                            and all(normalize_generation(g) in known for g in source_generations(p))}
         def remap(rows):
             output, keys = [], set()
             for row in rows:
@@ -433,7 +433,7 @@ class SOPStore:
                     generations.add(generation)
             months = {}
             for row in data.get("model_sales", []):
-                if row.get("generation") in known_summaries:
+                if normalize_generation(row.get("generation")) in known_summaries:
                     continue
                 if row.get("generation") in generations and row.get("metric") == "locked_orders" and row.get("value") is not None:
                     months.setdefault(row["month"], set()).add(row["generation"])
@@ -558,7 +558,7 @@ class SOPStore:
         known_summaries = self._known_summary_names()
         def summary_only(product):
             generations = source_generations(product)
-            return bool(generations) and all(g in known_summaries for g in generations)
+            return bool(generations) and all(normalize_generation(g) in known_summaries for g in generations)
         for product in data["products"]:
             if summary_only(product):
                 continue
