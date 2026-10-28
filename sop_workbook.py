@@ -14,6 +14,7 @@ import threading
 import uuid
 from pathlib import Path
 
+from sop_brand import brand_order_key
 from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
                          missing_artifact_module, node_executable, python_excel_requested)
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
@@ -22,7 +23,7 @@ SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
 # Bump this when managed workbook rendering or Excel compatibility changes
 # without changing its trusted cell map. Old exports resolve to revision 0.
-PRESENTATION_VERSION = 3
+PRESENTATION_VERSION = 4
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -47,7 +48,7 @@ def _annual_layout(products, months, editable_months=None):
         name = f"{year}年SOP"
         rows, merges, formulas, brand_totals = [], [], {}, []
         index = 4
-        for brand, models in grouped.items():
+        for brand, models in sorted(grouped.items(), key=lambda item: brand_order_key(item[0])):
             brand_start, model_totals = index, []
             for model, members in models.items():
                 start = index
@@ -144,7 +145,7 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
             letter = _column(col["column"])
             refs = ",".join(f"{letter}{r}" for r in members)
             formulas[f"{letter}{row}"] = f'=IF(COUNT({refs})=0,"",SUM({refs}))' if refs else '=""'
-    for brand, models in grouped.items():
+    for brand, models in sorted(grouped.items(), key=lambda item: brand_order_key(item[0])):
         brand_start, model_totals = index, []
         for model, members in models.items():
             start = index

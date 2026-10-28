@@ -11,6 +11,8 @@ import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
+from sop_brand import brand_order_key
+
 TZ = timezone(timedelta(hours=8))
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 WEIGHTS = {**{i: 0.02 for i in range(9, 14)}, **{i: 0.075 for i in range(5, 9)},
@@ -288,7 +290,7 @@ class SOPStore:
             counts[name] = counts.get(name, 0) + 1
         for item in items:
             item["name_conflict"] = counts[catalog_name_key(item)] > 1
-        return sorted(items, key=lambda p: (p.get("brand", ""), p.get("model", ""), p.get("version", ""), p["id"]))
+        return sorted(items, key=lambda p: (brand_order_key(p.get("brand", "")), p.get("model", ""), p.get("version", ""), p["id"]))
 
     def source_aliases(self):
         with self.lock:

@@ -15,6 +15,7 @@ from openpyxl.styles import Alignment, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from sop_brand import brand_order_key
 from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
@@ -178,7 +179,7 @@ def _layout(data):
 
     inline = data.get("roundtrip", {}).get("inline_schema") == 2
     brand_totals = {field: [] for field in fields}
-    for brand, models in groups.items():
+    for brand, models in sorted(groups.items(), key=lambda item: brand_order_key(item[0])):
         brand_first = next_row
         model_totals = {field: [] for field in fields}
         for model, group in models.items():

@@ -62,7 +62,7 @@ run(`
 
 const options = {includeLocks:true,includeVersions:true,selectedMonths:['2026-02','2026-01','2026-02']};
 const maintenanceDefaults = get('maintenanceExportOptions()');
-assert.deepEqual(maintenanceDefaults, {includeLocks:false,includeVersions:true,allProducts:true,
+assert.deepEqual(maintenanceDefaults, {includeLocks:false,includeVersions:true,includeWenjie:true,allProducts:true,
   selectedMonths:Array.from({length:24},(_,i)=>`${2026+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`)});
 run("brand='问界';model='M5';query='Max';range='annual';planYear='2027';showLocks=true");
 assert.deepEqual(get('maintenanceExportOptions()'), maintenanceDefaults,
@@ -76,8 +76,8 @@ assert.deepEqual(context.testOptions, options, 'Building an export must not sort
 assert.equal(detailed.rows.length, 14, 'Three model summaries plus four version details, each with two metrics.');
 assert.ok(detailed.rows.every(row => row.length === detailed.headers.length));
 assert.equal(detailed.rowProductIds.length, detailed.rows.length);
-assert.deepEqual(detailed.selectedProductIds, ['a1','a2','a3','b1']);
-assert.deepEqual(detailed.rowProductIds.slice(0,6), [null,null,'a1','a2','a1','a2'], 'Each detail metric retains the stable version ID; summaries are not writable IDs.');
+assert.deepEqual(detailed.selectedProductIds, ['b1','a1','a2','a3']);
+assert.deepEqual(detailed.rowProductIds.slice(4,10), [null,null,'a1','a2','a1','a2'], 'Each detail metric retains the stable version ID; summaries are not writable IDs.');
 assert.deepEqual([...new Set(detailed.rows.map(row => row[0]))].sort(), ['版本明细','车型汇总'].sort());
 
 const matchingRows = (result, {level,brand,model,version,metric}) => {
@@ -156,7 +156,7 @@ assert.equal(summary.rows.length, 6);
 assert.ok(summary.rows.every(row => row[0] === '车型汇总'));
 assert.ok(summary.rows.some(row => row[3] === '锁单数'));
 assert.ok(summary.rowProductIds.every(id => id === null));
-assert.deepEqual(summary.selectedProductIds, ['a1','a2','a3','b1'], 'Summary exports still preserve the selected catalog scope.');
+assert.deepEqual(summary.selectedProductIds, ['b1','a1','a2','a3'], 'Summary exports still preserve the selected catalog scope.');
 run('showLocks=true');
 const sopOnly = get("buildPlanExport({includeLocks:false,includeVersions:true,selectedMonths:['2026-02']})");
 assert.equal(sopOnly.rows.length, 7);
@@ -274,14 +274,31 @@ timers[0].callback();
 assert.deepEqual(revokedURLs, ['blob:test-plan-workbook']);
 assert.equal(messages.length, 1);
 
+// Hiding a brand scopes both visible totals and the trusted export catalog.
+run('setWenjieVisibility(false)');
+assert.deepEqual(get('products().map(p=>p.id)'), ['b1']);
+assert.equal(get("sumPlan(products(),'2026-01','sop').value"), 7);
+assert.equal(get("sumSales(products(),'2026-01',salesIndex,true).value"), 0);
+assert.equal(run('showWenjie'), false);
+assert.equal(run("localStorage.getItem('sop-show-wenjie')"), 'false');
+await getAsync("downloadPlanExport({includeWenjie:false,allProducts:true,includeVersions:true,selectedMonths:['2026-01']})");
+const hiddenBrandPayload=JSON.parse(requests.at(-1).options.body);
+assert.deepEqual(hiddenBrandPayload.selected_product_ids,['b1']);
+assert.ok(hiddenBrandPayload.rows.every(row=>row[1]==='智界'));
+assert.match(hiddenBrandPayload.scope,/不含问界/);
+assert.equal(get('exportProducts(maintenanceExportOptions()).length'),5,'The full maintenance template retains hidden brands.');
+assert.equal(get('state.products.length'),5,'Visibility never removes a catalog record.');
+run('setWenjieVisibility(true)');
+
 // Server errors must surface without a false success toast or a downloadable error document.
+const beforeErrors={events:downloadEvents.length,urls:objectURLs.length,messages:messages.length};
 context.fetch = async () => ({ok:false, json:async () => ({error:'Excel生成失败，请重试'})});
 await assert.rejects(() => run("downloadPlanExport({includeLocks:false,includeVersions:false,selectedMonths:['2026-01']})"), /Excel生成失败，请重试/);
 context.fetch = async () => ({ok:false, json:async () => { throw new Error('invalid JSON'); }});
 await assert.rejects(() => run("downloadPlanExport({includeLocks:false,includeVersions:false,selectedMonths:['2026-01']})"), /导出|生成|下载|失败/);
-assert.equal(downloadEvents.length, 3);
-assert.equal(objectURLs.length, 1);
-assert.equal(messages.length, 1);
+assert.equal(downloadEvents.length, beforeErrors.events);
+assert.equal(objectURLs.length, beforeErrors.urls);
+assert.equal(messages.length, beforeErrors.messages);
 
 // Conflicting old/new model sources must not suppress unrelated known version locks.
 run(`

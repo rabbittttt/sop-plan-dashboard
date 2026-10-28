@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Workbook, SpreadsheetFile, FileBlob } from '@oai/artifact-tool';
 import { PYTHON } from './runtime.mjs';
+import { compareBrands } from './brand_order.mjs';
 
 const log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n');
 console.log = log;
@@ -110,7 +111,7 @@ function makeLayout(data, parsed) {
     const from=grand?1:2;
     if(identity.length>from)merges.push(column(from)+r+':'+column(identity.length)+r);
   }
-  for(const [brand,models] of brands) {
+  for(const [brand,models] of [...brands].sort(([left], [right]) => compareBrands(left, right))) {
     const brandFirst=next, modelTotals=new Map(fields.map(f=>[f,[]]));
     for(const [model,group] of models) {
       const summaries=fields.map(f=>group.filter(r=>r.level==='车型汇总'&&r.metric===f));

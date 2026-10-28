@@ -292,7 +292,7 @@ assert.match(get("planMetricRow(state.products,'M5','model','m',['2026-08'],'loc
 // source version quantities appear in the rolling view while absent months stay blank.
 const screen = {innerHTML:''};
 const screenContext = vm.createContext({
-  localStorage:{getItem:()=> 'false'},
+  localStorage:{getItem:key=>key==='sop-show-locks-v2'?'false':null},
   document:{querySelector:selector=>selector==='#app'?screen:null},
 });
 vm.runInContext(source.split("document.addEventListener('click'")[0],screenContext);

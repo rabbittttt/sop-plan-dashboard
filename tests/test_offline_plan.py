@@ -55,8 +55,10 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         self.assertIsNotNone(sheet.find("m:mergeCells", ns))
         book = load_workbook(self.path, data_only=True)
         try:
-            self.assertEqual(book["SOP计划"]["P5"].value, 40)
-            self.assertTrue(book["SOP计划"]["M5"].protection.locked)
+            row = next(item["row"] for item in payload["layout"]["sheets"][0]["rows"]
+                       if item.get("product_id") == "a")
+            self.assertEqual(book["SOP计划"][f"P{row}"].value, 40)
+            self.assertTrue(book["SOP计划"][f"M{row}"].protection.locked)
         finally:
             book.close()
 
@@ -134,8 +136,9 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         workbook = load_workbook(self.path, data_only=False)
         self.addCleanup(workbook.close)
         sheet = workbook["SOP计划"]
-        self.assertEqual([sheet[f"{column}5"].value for column in "ABC"], ["=问界", "+M5", "@高配"])
-        self.assertTrue(all(sheet[f"{column}5"].data_type == "s" for column in "ABC"))
+        row = next(item["row"] for item in self._spec()["rows"] if item.get("product_id") == "a")
+        self.assertEqual([sheet[f"{column}{row}"].value for column in "ABC"], ["=问界", "+M5", "@高配"])
+        self.assertTrue(all(sheet[f"{column}{row}"].data_type == "s" for column in "ABC"))
         self.assertEqual(self.sync._parse(self.path.read_bytes())[4]["a\t2026-10"], None)
 
     def test_changed_layout_label_keeps_plan_edit_and_regenerates_metadata(self):
