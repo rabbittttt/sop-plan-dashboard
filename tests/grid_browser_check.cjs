@@ -96,7 +96,7 @@ async function main() {
     assert.equal(await page.locator('[data-action="sync-workbook"]').count(),0);
     assert.match(await page.locator('.sheet-sync').innerText(),/网页直接保存/);
     await page.screenshot({path:path.join(out,'direct-web-maintenance.png'),fullPage:true});
-    const click=action=>page.locator(`[data-action="${action}"]`).click();
+    const click=async action=>{await page.locator(`[data-action="${action}"]`).click();if(action==='bulk-plan')await page.locator('#grid-level').selectOption('version');};
     const openViews=async()=>{if(!await page.locator('#table-view-name').count())await click('view-panel');};
     const cell=(id,month)=>page.locator(`[data-grid-id="${id}"][data-grid-month="${month}"]`);
     await openViews();
@@ -214,23 +214,54 @@ async function main() {
     await click('view-apply');
     assert.match(await page.locator('#toast').innerText(),/先切换代际模式/);
 
+    // Model-year entry is the default; details survive zero and clear overrides.
+    state=fixture();
+    await page.evaluate(()=>{localStorage.removeItem('sop-table-views-v1');localStorage.removeItem('sop-hidden-rows-v1');});
+    await page.setViewportSize({width:1440,height:1000});
+    await page.reload();
+    await page.locator('[data-action="bulk-plan"]').waitFor();
+    assert.equal(await page.locator('.annual-heading').count(),0);
+    const tableTop=(await page.locator('.plan-card').boundingBox()).y;
+    assert.ok(tableTop<240,`Compact table starts at ${tableTop}px`);
+    const modelCell=()=>page.locator('[data-grid-model="S9 2026款"][data-grid-month="2026-10"]');
+    const beforeDetails=JSON.stringify(state.plans.filter(p=>p.product_id==='a'||p.product_id==='b'));
+    for(const [input,total] of [['500',640],['0',140],['',440]]) {
+      await page.locator('[data-action="bulk-plan"]').click();
+      assert.equal(await page.locator('#grid-level').inputValue(),'model');
+      assert.equal(await page.locator('[data-version="a"]').count(),0);
+      assert.equal(await modelCell().getAttribute('placeholder'),'汇总300');
+      await modelCell().fill(input);
+      if(input==='500')await page.screenshot({path:path.join(out,'model-year-maintenance.png'),fullPage:true});
+      await click('grid-save');
+      await page.locator('#grid-owner').waitFor({state:'detached'});
+      assert.equal(JSON.stringify(state.plans.filter(p=>p.product_id==='a'||p.product_id==='b')),beforeDetails);
+      assert.equal(await page.evaluate(()=>sumPlan(products(),'2026-10','sop').value),total);
+      await page.reload();
+      await page.locator('[data-action="bulk-plan"]').waitFor();
+      assert.equal(await page.evaluate(()=>sumPlan(products(),'2026-10','sop').value),total);
+    }
+    await page.screenshot({path:path.join(out,'compact-models.png'),fullPage:true});
+    assert.equal(state.products.filter(p=>p.plan_level==='model').length,1);
+    console.log('PASS: model-year default, total override, zero, clear fallback, unchanged details, compact layout and reload persistence.');
+
     // A new installation with no catalog or maintenance Excel can add its first row directly.
     state={...fixture(),products:[],plans:[]};
     await page.evaluate(()=>{localStorage.removeItem('sop-table-views-v1');localStorage.removeItem('sop-hidden-rows-v1');});
     await page.reload();
     await page.locator('[data-action="bulk-plan"]').waitFor();
     assert.equal(await page.locator('[data-action="bulk-plan"]').isEnabled(),true);
-    await click('bulk-plan');
+    await page.locator('[data-action="bulk-plan"]').click();
     assert.equal(await page.locator('#edit-dialog').evaluate(el=>el.open),false);
     await click('grid-add');
     const firstId=await page.locator('[data-new-row]').getAttribute('data-new-row');
-    for(const [field,value] of Object.entries({brand:'智界',model:'测试车型 2026款',version:'标准版'})) {
+    for(const [field,value] of Object.entries({brand:'智界',model:'测试车型 2026款'})) {
       await page.locator(`[data-grid-id="${firstId}"][data-grid-field="${field}"]`).fill(value);
     }
     await cell(firstId,'2026-10').fill('15');
     await click('grid-save');
     await page.locator('#grid-owner').waitFor({state:'detached'});
     assert.equal(state.products.length,1);
+    assert.equal(state.products[0].plan_level,'model');
     assert.equal(state.plans[0].sop,15);
     assert.equal(state.workbook_sync.status,'absent');
     assert.equal(apiPaths.some(p=>['/api/plan-workbook/open','/api/plan-workbook/export','/api/plan-workbook/download'].includes(p)),false,'Direct webpage maintenance must never create or open an Excel file');

@@ -17,6 +17,7 @@ from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, writ
 
 
 _SUM_FORMULA = re.compile(r'^=IF\(COUNT\((.+)\)=0,"",SUM\(\1\)\)$')
+_MODEL_FORMULA = re.compile(r'^=IF\(COUNT\(([^)]+)\)>0,SUM\(\1\),(.*)\)$')
 
 
 def _quantity(value):
@@ -35,6 +36,30 @@ def _literal(cell, value):
 def _formula_results(sheet, formulas):
     cache, visiting = {}, set()
 
+    def values_for(references):
+        values = []
+        for reference in references.split(","):
+            min_col, min_row, max_col, max_row = range_boundaries(reference)
+            for row in range(min_row, max_row + 1):
+                for column in range(min_col, max_col + 1):
+                    amount = result(f"{get_column_letter(column)}{row}")
+                    if amount is not None:
+                        values.append(amount)
+        return values
+
+    def evaluate(formula):
+        if formula == '=""':
+            return None
+        priority = _MODEL_FORMULA.fullmatch(formula)
+        if priority:
+            values = values_for(priority.group(1))
+            return sum(values) if values else evaluate("=" + priority.group(2))
+        matched = _SUM_FORMULA.fullmatch(formula)
+        if not matched:
+            raise ValueError("不支持的计划表合计公式。")
+        values = values_for(matched.group(1))
+        return sum(values) if values else None
+
     def result(address):
         if address in cache:
             return cache[address]
@@ -45,23 +70,7 @@ def _formula_results(sheet, formulas):
             value = cell.value
             return value if type(value) is int else None
         visiting.add(address)
-        formula = formulas[address]
-        if formula == '=""':
-            value = None
-        else:
-            matched = _SUM_FORMULA.fullmatch(formula)
-            if not matched:
-                raise ValueError(f"不支持的计划表合计公式：{address}")
-            values = []
-            for reference in matched.group(1).split(","):
-                min_col, min_row, max_col, max_row = range_boundaries(reference)
-                for row in range(min_row, max_row + 1):
-                    for column in range(min_col, max_col + 1):
-                        child = f"{get_column_letter(column)}{row}"
-                        amount = result(child)
-                        if amount is not None:
-                            values.append(amount)
-            value = sum(values) if values else None
+        value = evaluate(formulas[address])
         visiting.remove(address)
         cache[address] = value
         return value

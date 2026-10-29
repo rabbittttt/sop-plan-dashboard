@@ -16,6 +16,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from sop_export import validate_export
+from sop_plan_scope import is_model_plan, plan_total
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, stamp, text_field
 from sop_workbook import _cell_quantity
 from sop_table import parse_inline_sheet
@@ -285,9 +286,9 @@ class PlanRoundtrip:
                     row_counts = {}
                     if metric == "SOP计划量":
                         for offset, month in enumerate(clean["months"]):
-                            row[metric_col + 1 + offset] = _sum_known(plans.get((p, month), {}).get("sop") for p in members)
+                            row[metric_col + 1 + offset] = plan_total([selected[p] for p in members], month, plans)
                         for year in clean["annual_plans"][index]:
-                            values = [_sum_known(plans.get((p, f"{year}-{m:02d}"), {}).get("sop") for p in members) for m in range(1, 13)]
+                            values = [plan_total([selected[p] for p in members], f"{year}-{m:02d}", plans) for m in range(1, 13)]
                             clean["annual_plans"][index][year] = _sum_known(values)
                             row_counts[year] = sum(v is not None for v in values)
                     else:
@@ -295,7 +296,9 @@ class PlanRoundtrip:
                     counts.append(row_counts)
                 if seen_summary != {(group, metric) for group in groups for metric in metrics}:
                     raise ValidationError("导出车型汇总不完整，请刷新后重试。")
-                if clean["include_versions"] and seen_details != {(pid, metric) for pid in selected for metric in metrics}:
+                if clean["include_versions"] and seen_details != {
+                        (pid, metric) for pid in selected for metric in metrics
+                        if metric != "锁单数" or not is_model_plan(selected[pid])}:
                     raise ValidationError("导出版本明细不完整，请刷新后重试。")
                 editable, baseline = {}, {}
                 for pid, product in selected.items():

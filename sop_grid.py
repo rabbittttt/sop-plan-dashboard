@@ -1,7 +1,10 @@
 """Atomic, revision-checked saves for the editable planning grid."""
 import hashlib
 import json
+import re
 import uuid
+
+from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
 from sop_source_rules import generation_display_model, normalize_generation, project_generation_sources
 from sop_store import (ConflictError, TZ, ValidationError, catalog_name_key, display_version,
@@ -146,19 +149,27 @@ def save_grid_batch(store, body):
             summary_models = {(normalize_generation(name).partition(" ")[0], generation_display_model(name))
                               for name in rules["groups"]}
             for entry in entries:
-                if (not isinstance(entry, dict) or set(entry) - {"client_id", "brand", "model", "version", "plans"}
+                if (not isinstance(entry, dict) or set(entry) - {"client_id", "brand", "model", "version", "plans", "plan_level"}
                         or not isinstance(entry.get("plans", []), list)):
                     raise ValidationError("新增版本行格式无效。")
                 client_id = text_field(entry.get("client_id"), "新增行编号", 100)
                 if not client_id or client_id in entry_ids:
                     raise ValidationError("新增行编号为空或重复。")
                 labels = {}
+                if entry.get("plan_level") not in (None, "model", "version"):
+                    raise ValidationError("请选择车型或版本维护粒度。")
                 for field, label in (("brand", "品牌"), ("model", "车型"), ("version", "版本")):
                     value = text_field(entry.get(field), label, 200)
                     value = display_version(value, "") if field == "version" else value
+                    if field == "version" and (entry.get("plan_level") == "model" or not value):
+                        value = MODEL_PLAN_LABEL
                     if not value:
                         raise ValidationError(f"新增行请填写{label}。")
                     labels[field] = value
+                if is_model_plan(labels):
+                    if not re.search(r"20\d{2}款", labels["model"]):
+                        raise ValidationError("车型计划请填写带年款的车型，例如 M5 2026款。")
+                    labels["plan_level"] = "model"
                 name = catalog_name_key({**labels, "model": product_display_model(labels)})
                 if name in names:
                     raise ValidationError("相同品牌、车型年款和版本已存在，请在已有行维护。")

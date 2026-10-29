@@ -760,3 +760,46 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .grid-toolbar button:disabled,.grid-quantity:disabled,.grid-row-labels input:disabled { opacity:.65; cursor:not-allowed; }
 @media(max-width:700px) { .annual-sheet.grid-editing { --plan-name-width:245px; --plan-metric-width:65px; } .grid-row-labels { grid-template-columns:50px 1fr; } .grid-row-labels label:last-child { grid-column:1/-1; } }
 @media print { .saved-view-strip,.saved-view-panel,.grid-toolbar,.row-visibility { display:none!important; } }
+
+/* Dense work surface: keep numbers legible while reducing surrounding space. */
+.app-header { min-height:44px; gap:18px; padding:0 14px; }
+.app-brand { font-size:16px; gap:7px; }
+.app-brand .app-icon { width:26px; height:26px; flex-basis:26px; }
+.top-nav .nav-item { min-height:40px; padding:0 12px; }
+#app { padding:8px 14px 5px; }
+.workspace-footer { padding:5px 14px; font-size:11px; }
+.button,.button.small { min-height:28px; padding:4px 8px; }
+.toolbar,.annual-filters { gap:6px; }
+.annual-toolbar { gap:6px; margin-bottom:6px; }
+.inline-field select,.inline-field input,.field input,.field select { min-height:28px; padding-top:4px; padding-bottom:4px; }
+.sheet-tools { margin-bottom:3px; gap:4px 10px; }
+.sheet-meta { gap:4px 10px; font-size:11px; }
+.saved-view-strip { padding:3px 0; font-size:12px; }
+.saved-view-panel,.grid-toolbar { padding:8px; margin-bottom:6px; }
+.grid-toolbar p { margin-top:5px; font-size:12px; }
+.grid-toolbar .field { gap:3px; }
+.hidden-row-list { gap:5px; padding-top:6px; }
+.annual-sheet .table-scroll { max-height:calc(100vh - 172px); }
+.annual-sheet.grid-editing .table-scroll { max-height:calc(100vh - 260px); }
+.annual-sheet .plan-table thead tr:first-child > th { height:34px; padding:4px; }
+.annual-sheet .plan-table tbody tr > th,.annual-sheet .plan-table tbody tr > td { padding-top:2px; padding-bottom:2px; }
+.annual-sheet .plan-table td.sticky-metric { padding:3px 5px; }
+.annual-sheet .plan-table .edit-cell { min-height:24px; padding:2px 3px; margin:-2px -3px; }
+.annual-sheet .plan-table .row-toggle { gap:4px; }
+.row-visibility { padding:3px 5px; }
+.grid-row-labels input { height:27px; }
+.grid-row-labels.model-labels { grid-template-columns:60px 1fr; }
+.grid-row-labels.model-labels label { grid-column:auto; }
+.annual-sheet.grid-model-editing { --plan-name-width:200px; }
+.grid-quantity::placeholder { font-size:11px; font-weight:400; }
+.annual-sheet .grid-quantity { height:28px; }
+.grid-row-actions { margin-top:3px; gap:5px; }
+.grid-row-actions .button { min-height:24px; }
+.sheet-footnote,.sheet-notes { font-size:11px; margin:5px 0; }
+.panel-head { padding:9px 12px; }
+.filterbar { padding:10px 12px; margin-bottom:10px; gap:8px; }
+.page-heading { margin-bottom:10px; }
+.stats { gap:10px; margin-bottom:12px; }
+.stat-card,.card.padded,.padded { padding:12px; }
+.page-section { margin-bottom:12px; }
+@media(max-width:700px) { .app-header { padding:4px 9px 0; gap:0 8px; } #app { padding:6px 8px; } .annual-sheet .table-scroll { max-height:68vh; } }

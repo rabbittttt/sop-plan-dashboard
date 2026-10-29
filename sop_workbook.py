@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 from sop_brand import brand_order_key
+from sop_plan_scope import is_model_plan
 from sop_runtime import (ArtifactDependencyError, ensure_artifact_tool,
                          missing_artifact_module, node_executable, python_excel_requested)
 from sop_store import ConflictError, TZ, ValidationError, catalog_name_key, horizon, month_add, month_range, stamp
@@ -23,7 +24,7 @@ SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
 # Bump this when managed workbook rendering or Excel compatibility changes
 # without changing its trusted cell map. Old exports resolve to revision 0.
-PRESENTATION_VERSION = 5
+PRESENTATION_VERSION = 6
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -179,6 +180,20 @@ def _continuous_layout(products, months, editable_months, current_month, plans=N
                          "label_b": f"{model} 合计", "label_c": None})
             merges.append(f"B{index}:C{index}")
             totals(index, range(start, index))
+            model_rows = [start + offset for offset, product in enumerate(members) if is_model_plan(product)]
+            version_rows = [start + offset for offset, product in enumerate(members) if not is_model_plan(product)]
+            if model_rows:
+                for col in columns:
+                    letter = _column(col["column"])
+                    if col["kind"] == "month":
+                        direct = ",".join(f"{letter}{r}" for r in model_rows)
+                        detail = ",".join(f"{letter}{r}" for r in version_rows)
+                        fallback = f'IF(COUNT({detail})=0,"",SUM({detail}))' if detail else '""'
+                        formulas[f"{letter}{index}"] = f'=IF(COUNT({direct})>0,SUM({direct}),{fallback})'
+                    else:
+                        year = next(y for y in years if y["year"] == col["year"])
+                        refs = f"{_column(year['first_column'])}{index}:{_column(year['last_month_column'])}{index}"
+                        formulas[f"{letter}{index}"] = f'=IF(COUNT({refs})=0,"",SUM({refs}))'
             model_totals.append(index)
             index += 1
         rows.append({"row": index, "kind": "brand_total", "label_a": None,

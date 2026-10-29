@@ -23,7 +23,7 @@ GRID = Border(*(Side(style="thin", color="8498AA") for _ in range(4)))
 
 
 def plan_guidance(include_locks=False, has_readonly=False):
-    return ("单位：辆。只填版本月计划量；可在主表新增、删除行或修改名称，删除表示停用并保留历史。合计自动计算。"
+    return ("单位：辆。填车型总量或版本月计划；车型总量优先，留空按版本汇总。插行时版本可留空，车型需带年款；删行表示停用。合计自动计算。"
             + ("锁单行无需填写。" if include_locks else "")
             + ("汇总代际由成员计划自动相加，只读；请切换单代际修改。" if has_readonly else ""))
 

@@ -16,6 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from sop_brand import brand_order_key
+from sop_plan_scope import MODEL_PLAN_LABEL
 from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
@@ -120,7 +121,7 @@ def _layout(data):
         nonlocal next_row
         row = {"row": next_row, "kind": kind, "metric": source["metric"],
                "product_id": source["product_id"], "labels": [None] * len(identity),
-               "values": {}, "formulas": {}, "version": source["version"]}
+               "values": {}, "formulas": {}, "version": source["version"], "annual_known": source["annual_known"]}
         next_row += 1
         for item in columns:
             column = item["column"]
@@ -149,6 +150,32 @@ def _layout(data):
         return row
 
     def sum_into(row, children):
+        model_inputs = [child for child in children if child.get("version") == MODEL_PLAN_LABEL]
+        if row["kind"] == "model_total" and row["metric"] == "SOP计划量" and model_inputs:
+            versions = [child for child in children if child not in model_inputs]
+            for item in columns:
+                column, number = item["column"], row["row"]
+                letter = _column(column)
+                if item["kind"] == "month":
+                    known = [c for c in model_inputs if c["values"][column] is not None]
+                    expected = _sum_known(c["values"][column] for c in (known or versions))
+                    if row["values"][column] != expected:
+                        raise ValueError("车型总量与有效计划口径不一致。")
+                    direct = ",".join(f"{letter}{c['row']}" for c in model_inputs)
+                    detail = ",".join(f"{letter}{c['row']}" for c in versions)
+                    fallback = f'IF(COUNT({detail})=0,"",SUM({detail}))' if detail else '""'
+                    row["formulas"][column] = f'=IF(COUNT({direct})>0,SUM({direct}),{fallback})'
+                else:
+                    year = next(y for y in years if y["year"] == item["year"])
+                    if not year["full"] and not data.get("roundtrip"):
+                        continue
+                    selected = [row["values"][c["column"]] for c in columns if c["kind"] == "month" and c["month"].startswith(item["year"] + "-")]
+                    known = [value for value in selected if value is not None]
+                    off_count = 0 if year["full"] else row["annual_known"][item["year"]] - len(known)
+                    off_sum = 0 if year["full"] else (row["values"][column] or 0) - sum(known)
+                    ref = f"{_column(year['first_column'])}{number}:{_column(column-1)}{number}"
+                    row["formulas"][column] = f'=IF(COUNT({ref})+{off_count}=0,"",SUM({ref})+{off_sum})'
+            return
         for item in columns:
             column = item["column"]
             if item["kind"] == "year_total" and row["metric"] == "锁单数":
@@ -188,13 +215,13 @@ def _layout(data):
             details = {field: [r for r in group if r["level"] == "版本明细" and r["metric"] == field] for field in fields}
             if any(len(value) != 1 for value in summaries.values()):
                 raise ValueError(f"车型汇总行不完整：{brand}/{model}")
-            if data["include_versions"] and (not details[fields[0]] or any(len(value) != len(details[fields[0]]) for value in details.values())):
-                raise ValueError(f"版本明细行不完整：{brand}/{model}")
+            if data["include_versions"] and not details["SOP计划量"]:
+                raise ValueError(f"计划明细行不完整：{brand}/{model}")
             detail_rows = {field: [] for field in fields}
             if data["include_versions"]:
-                for index in range(len(details[fields[0]])):
-                    if any(details[field][index]["version"] != details[fields[0]][index]["version"] for field in fields):
-                        raise ValueError(f"版本顺序不一致：{brand}/{model}")
+                version_names = [[r["version"] for r in details[field] if r["version"] != MODEL_PLAN_LABEL] for field in fields]
+                if any(names != version_names[0] for names in version_names):
+                    raise ValueError(f"版本顺序不一致：{brand}/{model}")
                 for field in fields:
                     for source in details[field]:
                         row = add_source(source, "product")
@@ -204,6 +231,8 @@ def _layout(data):
                 if inline:
                     for field in fields:
                         block = detail_rows[field]
+                        if not block:
+                            continue
                         block[0]["labels"][1] = model
                         if len(block) > 1:
                             merges.append(f"B{block[0]['row']}:B{block[-1]['row']}")

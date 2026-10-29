@@ -54,6 +54,12 @@ assert.ok(detailRows.slice(0,3).every(r=>!r.includes('data-edit=')));
 assert.match(detailRows[3], /data-edit="a" data-month="2026-08"[^]*?>0<\/button>/);
 assert.match(detailRows[4], /data-edit="b" data-month="2026-08"[^]*?>50<\/button>/);
 assert.match(detailRows[5], /data-edit="c" data-month="2026-09"[^]*?title="待维护，点击输入计划量"><span class="missing">—<\/span><\/button>/);
+vm.runInContext("state.products.push({id:'model-total',model:'M5',version:modelPlanLabel,plan_level:'model'});planIndex.set('model-total|2026-08',{sop:100})",context);
+assert.equal(get("sumPlan(state.products,'2026-08','sop').value"),100);
+assert.equal(get("sumSales(state.products,'2026-08',salesIndex,true).value"),200,'Adding model plans must preserve the model lock source');
+assert.equal(get("sumSales(state.products,'2026-08',salesIndex,false).value"),66,'Model plan records never become version lock records');
+assert.equal((get("planVersionRows(state.products,['2026-08'])").match(/<tr\b/g)||[]).length,6);
+vm.runInContext("state.products.pop();planIndex.delete('model-total|2026-08')",context);
 const frozenRows=get("snapshotRows({products:[{id:'a'}],meta:{months:['2026-10']},plans:[{product_id:'old-version',month:'2026-09',sop:0,forecast:8}]})");
 assert.equal(frozenRows.length,4);
 assert.deepEqual(frozenRows.find(r=>r.product_id==='old-version'&&r.month==='2026-09'),
@@ -131,11 +137,11 @@ vm.runInContext(`
 `,context);
 let rendered=app.innerHTML;
 assert.equal([...rendered.match(/<thead>[^]*?<\/thead>/)[0].matchAll(/<th\b/g)].length,15);
-assert.match(rendered,/SOP计划 · M\+6/);
-assert.match(rendered,/2026\.05—2027\.04/);
+assert.doesNotMatch(rendered,/annual-heading|SOP计划 · M\+6|前5个月＋当月＋未来6个月/);
+assert.match(rendered,/2026\.05/);
+assert.match(rendered,/2027\.04/);
 assert.doesNotMatch(rendered,/12个月合计/);
 assert.match(rendered,/2026年<span class="annual-caption">年度计划量/);
-assert.match(rendered,/前5个月＋当月＋未来6个月/);
 const rollingHeaders=rendered.match(/<thead>[^]*?<\/thead>/)[0];
 assert.equal((rollingHeaders.match(/past-month/g)||[]).length,5);
 assert.deepEqual([...rollingHeaders.matchAll(/class="month-tag">([^<]+)</g)].map(m=>m[1]),['M-5','M-4','M-3','M-2','M-1','本月','M+1','M+2','M+3','M+4','M+5','M+6']);
@@ -168,8 +174,8 @@ vm.runInContext(`
 rendered=app.innerHTML;
 const headers=[...rendered.match(/<thead>[^]*?<\/thead>/)[0].matchAll(/<th\b[^]*?<\/th>/g)];
 assert.equal(headers.length,15);
-assert.match(rendered,/<h1>SOP计划<\/h1>/);
-assert.match(rendered,/2028年1—12月/);
+assert.doesNotMatch(rendered,/<h1>|annual-heading/);
+assert.match(rendered,/value="2028" selected>2028年/);
 assert.match(rendered,/2028年合计/);
 assert.match(rendered,/Excel待同步/);
 assert.doesNotMatch(rendered,/class="stats"|历史锁单参考|品牌维护进度/);

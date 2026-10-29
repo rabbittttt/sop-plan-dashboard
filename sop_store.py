@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from sop_brand import brand_order_key
+from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan, effective_products, plan_total
 from sop_source_rules import (MergeRuleError, load_merge_rules, summary_names, project_generation_sources,
                               normalize_generation, product_display_model, catalog_model_input,
                               _generations as source_generations)
@@ -268,8 +269,10 @@ class SOPStore:
         overrides = json.loads(row["overrides_json"])
         item = dict(source)
         item["version"] = display_version(source.get("version"), source.get("configuration") or "未命名版本")
-        item.update({key: value for key, value in overrides.items() if key in {"brand", "model", "version"}})
+        item.update({key: value for key, value in overrides.items() if key in {"brand", "model", "version", "plan_level"}})
         item["version"] = display_version(item.get("version"))
+        if is_model_plan(item):
+            item.update(plan_level="model", version=MODEL_PLAN_LABEL)
         item.update({"id": row["id"], "active": bool(row["active"]),
                      "source_backed": bool(source.get("id")), "source_present": bool(row["source_present"]),
                      "source_generation": source.get("generation") or source.get("model_year") or "",
@@ -400,11 +403,13 @@ class SOPStore:
             sales = sales if sales is not None else self.read_sales()
             rows = [dict(row) for row in self.db.execute("SELECT * FROM plans ORDER BY product_id,month")]
             visible = {p["id"]: p for p in sales["products"]}
+            raw_catalog = {p["id"]: p for p in self._catalog_items()}
+            plan_index = {(r["product_id"], r["month"]): r for r in rows}
             result = [row for row in rows if row["product_id"] in visible and not visible[row["product_id"]].get("read_only")]
             for product in sales["products"]:
                 if not product.get("read_only"):
                     continue
-                members = set(product["member_product_ids"])
+                members = set(product.get("model_member_product_ids", product["member_product_ids"]))
                 months = sorted({row["month"] for row in rows if row["product_id"] in members})
                 for month in months:
                     values = [row for row in rows if row["product_id"] in members and row["month"] == month]
@@ -416,7 +421,16 @@ class SOPStore:
                         item[field] = sum(known_values) if known_values else None
                     item["known_members"] = sum(row.get("sop") is not None for row in values)
                     item["total_members"] = len(members)
-                    item["partial"] = item["known_members"] < len(members) or bool(product.get("missing_member_generations"))
+                    if is_model_plan(product):
+                        model_members = [raw_catalog[pid] for pid in members if pid in raw_catalog]
+                        has_total = any(is_model_plan(p) and plan_index.get((p["id"], month), {}).get("sop") is not None
+                                        for p in model_members)
+                        item["sop"] = plan_total(model_members, month, plan_index) if has_total else None
+                        item["forecast"] = None
+                        chosen = effective_products(model_members, month, plan_index)
+                        item["known_members"] = sum(plan_index.get((p["id"], month), {}).get("sop") is not None for p in chosen)
+                        item["total_members"] = len(chosen)
+                    item["partial"] = item["known_members"] < item["total_members"] or bool(product.get("missing_member_generations"))
                     result.append(item)
             return result
 
@@ -576,7 +590,7 @@ class SOPStore:
             incoming.setdefault(binding_key(product), []).append(product)
         known = {}
         for product in self._catalog_items():
-            if summary_only(product):
+            if summary_only(product) or is_model_plan(product):
                 continue
             known.setdefault(binding_key(product), []).append(product)
         bindings = {}
@@ -646,6 +660,8 @@ class SOPStore:
                             value = text_field(change.get(field), label, 200)
                             if field == "version":
                                 value = display_version(value, "")
+                                if is_model_plan(prior) and value != MODEL_PLAN_LABEL:
+                                    raise ValidationError("车型总量行无需填写版本，请保留车型总量标识。")
                             if not value:
                                 raise ValidationError(f"请填写{label}。")
                             if field == "model" and before:
@@ -656,6 +672,12 @@ class SOPStore:
                                 value = catalog_model_input(value, prior)
                             if value != prior.get(field) or not before:
                                 overrides[field] = value
+                    if is_model_plan({**prior, **overrides}):
+                        if not re.search(r"20\d{2}款", overrides.get("model", prior.get("model", ""))):
+                            raise ValidationError("车型总量请填写带年款的车型名称，例如 M5 2026款。")
+                        if change.get("bind_source_id"):
+                            raise ValidationError("车型总量无需关联版本销量来源。")
+                        overrides["plan_level"] = "model"
                     active = change.get("active", prior.get("active", True))
                     if not isinstance(active, bool):
                         raise ValidationError("启用状态必须为布尔值。")
@@ -718,6 +740,7 @@ class SOPStore:
                         self.db.execute("UPDATE product_catalog SET source_json=?,source_present=1,revision=revision+1,updated_at=? WHERE id=?", (source["source_json"], current, pid))
                         changed = True
                     saved_ids.append(pid)
+                self._validate_model_plan_catalog()
                 changed = self._ensure_catalog_fields() or changed
                 if changed:
                     self._record_catalog(owner, reason)
@@ -822,6 +845,19 @@ class SOPStore:
         from sop_grid import save_grid_batch
         return save_grid_batch(self, body)
 
+    def _validate_model_plan_catalog(self):
+        seen = set()
+        for product in self._catalog_items():
+            if not is_model_plan(product):
+                continue
+            model = product_display_model(product)
+            if not re.search(r"20\d{2}款", model):
+                raise ValidationError("车型总量请保留车型年款，例如 M5 2026款。")
+            key = normalize_generation(product["brand"]), model
+            if key in seen:
+                raise ValidationError("同一车型年款只能保留一条车型总量，请维护已有记录。")
+            seen.add(key)
+
     def _merge_workbook_catalog(self, changes, choice, current_stamp, current_month):
         """Merge existing row labels/status inside the caller's transaction.
 
@@ -869,10 +905,14 @@ class SOPStore:
                     requested = text_field(requested, label, 200)
                     if field == "version":
                         original, requested = display_version(original, ""), display_version(requested, "")
+                        if is_model_plan(prior) and requested != MODEL_PLAN_LABEL:
+                            raise ValidationError("车型总量行无需填写版本，请保留车型总量标识。")
                     elif field == "model":
                         original = catalog_model_input(original, prior)
                         requested = catalog_model_input(requested, prior)
                         database = catalog_model_input(database, prior)
+                        if is_model_plan(prior) and not re.search(r"20\d{2}款", requested):
+                            raise ValidationError("车型总量请保留车型年款，例如 M5 2026款。")
                     if not original or not requested:
                         raise ValidationError(f"请完整填写{label}；减少版本请删除整条明细行。")
                 if requested == original or requested == database:
@@ -908,6 +948,7 @@ class SOPStore:
                 updated.add(pid)
         if conflicts and choice is None:
             raise ConflictError(conflicts)
+        self._validate_model_plan_catalog()
         return updated, deactivated
 
     def import_workbook_plans(self, body):
@@ -958,6 +999,10 @@ class SOPStore:
                         if not value:
                             raise ValidationError(f"新增车型/版本行请填写{label}。")
                         labels[field] = value
+                    if is_model_plan(labels):
+                        if not re.search(r"20\d{2}款", labels["model"]):
+                            raise ValidationError("车型计划请填写带年款的车型，例如 M5 2026款。")
+                        labels["plan_level"] = "model"
                     name_key = catalog_name_key(labels)
                     matches = names.get(name_key, [])
                     if len(matches) > 1:
@@ -1247,7 +1292,7 @@ class SOPStore:
                         and (not model or p.get("model") == model) and (not product_id or p["id"] == product_id)
                         and (p["id"] in existing_ids or ((not p.get("start_month") or month >= p["start_month"])
                              and (not p.get("end_month") or month <= p["end_month"])))]
-            product_ids = {pid for p in products for pid in p.get("member_product_ids", [p["id"]])}
+            product_ids = {pid for p in products for pid in p.get("model_member_product_ids", p.get("member_product_ids", [p["id"]]))}
             incomplete_groups = any(p.get("missing_member_generations") for p in products)
             if not products:
                 raise ValidationError("没有符合筛选条件的产品。")
@@ -1259,10 +1304,17 @@ class SOPStore:
             else:
                 zero = self._validate_sunday(configured)
             shipment_rows = [dict(r) for r in self.db.execute("SELECT * FROM shipments WHERE month=?", (month,)) if r["product_id"] in product_ids]
+            raw_products = [p for p in self._catalog_items() if p["id"] in product_ids]
+            shipment_index = {}
+            for row in shipment_rows:
+                item = shipment_index.setdefault((row["product_id"], month), {"sop": 0})
+                item["sop"] += row["quantity"]
+            actual_products = effective_products(raw_products, month, shipment_index)
+            actual_ids = {p["id"] for p in actual_products}
             covered = {r["product_id"] for r in shipment_rows}
-            actual = sum(r["quantity"] for r in shipment_rows) if covered == product_ids and not incomplete_groups else None
+            actual = plan_total(actual_products, month, shipment_index) if actual_products and all(p["id"] in covered for p in actual_products) and not incomplete_groups else None
             current_month = self.clock().astimezone(TZ).strftime("%Y-%m")
-            actual_status = "missing" if actual is None else "pending" if any(r["status"] == "pending" for r in shipment_rows) else "in_progress" if month >= current_month else "settled"
+            actual_status = "missing" if actual is None else "pending" if any(r["status"] == "pending" for r in shipment_rows if r["product_id"] in actual_ids) else "in_progress" if month >= current_month else "settled"
             rows = []
             for week in range(13, -1, -1):
                 day = zero - timedelta(weeks=week)
@@ -1270,9 +1322,13 @@ class SOPStore:
                 snap = self.db.execute("SELECT id,payload FROM snapshots WHERE auto_key=?", (stamp(cutoff),)).fetchone()
                 plan = None
                 if snap:
-                    candidates = [r for r in json.loads(snap["payload"])["plans"] if r["month"] == month and r["product_id"] in product_ids]
-                    if {r["product_id"] for r in candidates if r["sop"] is not None} == product_ids and not incomplete_groups:
-                        plan = sum(r["sop"] for r in candidates)
+                    frozen = json.loads(snap["payload"])
+                    plan_index = {(r["product_id"], r["month"]): r for r in frozen["plans"]}
+                    historical = {p["id"]: p for p in frozen.get("products", [])}
+                    scope = [historical.get(p["id"], p) for p in raw_products]
+                    required = effective_products(scope, month, plan_index)
+                    if required and all(plan_index.get((p["id"], month), {}).get("sop") is not None for p in required) and not incomplete_groups:
+                        plan = plan_total(required, month, plan_index)
                 match = None
                 if not snap:
                     status = "future" if cutoff > self.clock() else "missing_snapshot"

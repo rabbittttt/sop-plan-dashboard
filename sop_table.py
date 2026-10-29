@@ -6,6 +6,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from sop_store import ValidationError, catalog_name_key, display_version, text_field
+from sop_plan_scope import MODEL_PLAN_LABEL, is_model_plan
 
 
 def _quantity(value):
@@ -157,9 +158,13 @@ def parse_inline_sheet(sheet, manifest):
             normalized = text_field(raw, label, 200)
             if field == "version":
                 normalized = display_version(normalized, "")
+                if not normalized and original is None:
+                    normalized = MODEL_PLAN_LABEL
             if not normalized:
                 raise ValidationError(f"第 {number} 行请完整填写品牌、车型和版本；减少版本请删除整条明细行。")
             parsed_labels[field] = normalized
+        if original is not None and is_model_plan(products[pid]) and parsed_labels["version"] != MODEL_PLAN_LABEL:
+            raise ValidationError("车型总量行的版本标识请保留；需要分版本时请新增版本行。")
         candidate = {"number": number, "row": row, "labels": parsed_labels}
         if original is not None and products[pid].get("read_only") and catalog_name_key(parsed_labels) != catalog_name_key(products[pid]):
             raise ValidationError(f"第 {number} 行是自动汇总代际，名称只读；请切换单代际维护。")

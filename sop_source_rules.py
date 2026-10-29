@@ -228,6 +228,7 @@ def _sum_known(values):
 
 def project_generation_sources(data, mode, rules, known_summaries=()):
     """Build a read-only summary view from single-generation identities only."""
+    from sop_plan_scope import is_model_plan
     if not isinstance(mode, str) or mode not in MODES:
         raise MergeRuleError("代际视图只能选择单代际或汇总代际。")
     # History only remembers known summary identities, never old memberships.
@@ -283,6 +284,8 @@ def project_generation_sources(data, mode, rules, known_summaries=()):
                 "read_only": True, "member_product_ids": ids, "summary_generation": summary,
                 "member_generations": list(members), "missing_member_generations": missing,
                 "start_month": None, "end_month": None})
+            if all(is_model_plan(by_id[item]) for item in ids):
+                result["products"][-1].update(plan_level="model", model_member_product_ids=[p["id"] for p in selected])
             grouped = defaultdict(list)
             for row in detail.get("sales", []):
                 if row.get("product_id") in ids:

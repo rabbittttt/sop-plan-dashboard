@@ -9,6 +9,7 @@ const log = (...args) => process.stderr.write(args.map(String).join(' ') + '\n')
 console.log = log;
 import { column, planTitle, planPeriod, planGuidance, setupPlanSheet, stylePlanRow, styleManualSection } from './plan_sheet_style.mjs';
 const quantity = value => value === null || (Number.isSafeInteger(value) && value >= 0);
+const MODEL_PLAN_LABEL='车型总量（不分版本）';
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
 
 function validate(data) {
@@ -75,7 +76,7 @@ function makeLayout(data, parsed) {
   }
   let next=5;
   function sourceRow(source,kind) {
-    const row={row:next++,kind,metric:source.metric,productId:source.productId,labels:Array(identity.length).fill(null),values:{},formulas:{},version:source.version};
+    const row={row:next++,kind,metric:source.metric,productId:source.productId,labels:Array(identity.length).fill(null),values:{},formulas:{},version:source.version,annualKnown:source.annualKnown};
     for(const col of columns) {
       row.values[col.column]=col.kind==='month'?source.values[col.sourceIndex]:source.annual[col.year];
       if(kind==='product'&&source.metric==='SOP计划量'&&col.kind==='year_total'&&(data.roundtrip||years.find(y=>y.year===col.year).full)) {
@@ -92,6 +93,25 @@ function makeLayout(data, parsed) {
     rows.push(row);return row;
   }
   function sumInto(row,children) {
+    const models=children.filter(c=>c.version===MODEL_PLAN_LABEL);
+    if(row.kind==='model_total'&&row.metric==='SOP计划量'&&models.length){
+      const versions=children.filter(c=>c.version!==MODEL_PLAN_LABEL);
+      for(const col of columns){
+        if(col.kind==='month'){
+          const known=models.filter(c=>c.values[col.column]!==null),values=(known.length?known:versions).map(c=>c.values[col.column]).filter(v=>v!==null);
+          const expected=values.length?values.reduce((a,b)=>a+b,0):null;
+          if(row.values[col.column]!==expected)throw Error('Model total does not reconcile with effective plans');
+          const direct=models.map(c=>column(col.column)+c.row).join(','),detail=versions.map(c=>column(col.column)+c.row).join(',');
+          row.formulas[col.column]='=IF(COUNT('+direct+')>0,SUM('+direct+'),'+(detail?'IF(COUNT('+detail+')=0,"",SUM('+detail+'))':'""')+')';
+        }else{
+          const y=years.find(y=>y.year===col.year);if(!y.full&&!data.roundtrip)continue;
+          const selected=columns.filter(c=>c.kind==='month'&&c.month.startsWith(col.year+'-')).map(c=>row.values[c.column]).filter(v=>v!==null);
+          const count=y.full?0:row.annualKnown[col.year]-selected.length,amount=y.full?0:(row.values[col.column]??0)-selected.reduce((a,b)=>a+b,0),ref=column(y.first_column)+row.row+':'+column(col.column-1)+row.row;
+          row.formulas[col.column]='=IF(COUNT('+ref+')+'+count+'=0,"",SUM('+ref+')+'+amount+')';
+        }
+      }
+      return;
+    }
     for(const col of columns) {
       if(col.kind==='year_total'&&row.metric==='锁单数'){row.values[col.column]=null;continue;}
       const known=children.map(c=>c.values[col.column]).filter(v=>typeof v==='number');
@@ -117,10 +137,11 @@ function makeLayout(data, parsed) {
       const summaries=fields.map(f=>group.filter(r=>r.level==='车型汇总'&&r.metric===f));
       if(summaries.some(list=>list.length!==1))throw new Error('Exactly one model summary per metric is required: '+brand+'/'+model);
       const details=fields.map(f=>group.filter(r=>r.level==='版本明细'&&r.metric===f));
-      if(data.include_versions&&(!details[0].length||details.some(list=>list.length!==details[0].length)))throw new Error('Version metric rows do not align: '+brand+'/'+model);
+      if(data.include_versions&&!details[fields.indexOf('SOP计划量')].length)throw new Error('Plan detail rows are missing: '+brand+'/'+model);
       const first=next,detailRows=new Map(fields.map(f=>[f,[]]));
       if(data.include_versions) {
-        for(let i=0;i<details[0].length;i++)if(details.some(list=>list[i].version!==details[0][i].version))throw new Error('Version order mismatch: '+brand+'/'+model);
+        const versionNames=details.map(list=>list.filter(row=>row.version!==MODEL_PLAN_LABEL).map(row=>row.version));
+        if(versionNames.some(names=>JSON.stringify(names)!==JSON.stringify(versionNames[0])))throw new Error('Version order mismatch: '+brand+'/'+model);
         for(const list of details)for(const source of list) {
           const row=sourceRow(source,'product');
           row.labels[2]=source.version+(source.metric==='锁单数'?'（锁单数）':'');
