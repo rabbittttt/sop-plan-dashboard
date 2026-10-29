@@ -129,11 +129,9 @@ function makeLayout(data, parsed) {
         if(inline)for(const field of fields) {
           const group=detailRows.get(field);
           if(!group.length)continue;
-          group[0].labels[0]=brand;
           group[0].labels[1]=model;
           // Keep lock and SOP blocks separate so the SOP anchor remains editable.
-          if(group.length>1)for(const letter of ['A','B'])
-            merges.push(letter+group[0].row+':'+letter+group.at(-1).row);
+          if(group.length>1)merges.push('B'+group[0].row+':B'+group.at(-1).row);
         }
       }
       if(next>first&&!inline) {
@@ -151,10 +149,8 @@ function makeLayout(data, parsed) {
       const row=totalRow(field,modelTotals.get(field),'brand_total',brand+(field==='锁单数'?' 锁单':'')+' 合计');
       mergeTotal(row.row);brandTotals.get(field).push(row);
     }
-    if(!inline||!data.include_versions) {
-      rows.find(r=>r.row===brandFirst).labels[0]=brand;
-      if(next-brandFirst>1)merges.push('A'+brandFirst+':A'+(next-1));
-    }
+    rows.find(r=>r.row===brandFirst).labels[0]=brand;
+    if(next-brandFirst>1)merges.push('A'+brandFirst+':A'+(next-1));
     next++;
   }
   for(const field of fields) {

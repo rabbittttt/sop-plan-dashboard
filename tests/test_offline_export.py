@@ -107,7 +107,7 @@ class OfflineExportTest(unittest.TestCase):
             self.assertIn("D1:F1", {str(item) for item in sheet.merged_cells.ranges})
             self.assertEqual(sheet["D4"].value, "10月")
             self.assertEqual(sheet["F4"].value, "年度合计")
-            self.assertIn("A5:A6", {str(item) for item in sheet.merged_cells.ranges})
+            self.assertIn("A5:A12", {str(item) for item in sheet.merged_cells.ranges})
             self.assertEqual(sheet["D9"].value, 999)  # Model lock, not version sum.
             self.assertEqual(sheet["C7"].value, "V1")
             self.assertEqual(sheet["D7"].value, 10)

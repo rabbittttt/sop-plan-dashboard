@@ -118,7 +118,8 @@ class InlineWorkbookTest(unittest.TestCase):
         with zipfile.ZipFile(self.path) as archive:
             sheet = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
         merges = {area.attrib["ref"] for area in sheet.findall(f".//{{{NS}}}mergeCell")}
-        self.assertIn(f"A{first}:A{second}", merges)
+        brand_total = next(row["row"] for row in self.spec()["rows"] if row["kind"] == "brand_total")
+        self.assertIn(f"A{first}:A{brand_total}", merges)
         self.assertIn(f"B{first}:B{second}", merges)
         self.assertIsNone(next(row for row in sheet.findall(f".//{{{NS}}}row")
                                if row.attrib["r"] == str(second)).find(f"{{{NS}}}c[@r='A{second}']/{{{NS}}}is"))
@@ -132,8 +133,17 @@ class InlineWorkbookTest(unittest.TestCase):
         self.assertTrue(self.products()["b"]["active"])
         self.assertEqual(self.plan("b")["sop"], 17)
 
-    def test_new_row_without_explicit_brand_model_is_rejected(self):
+    def test_new_row_in_actual_merged_brand_block_inherits_brand(self):
         row = self.row("b")
+        change_rows(self.path, row, insert={"B": "M7", "C": "新增版本", self.month_col("2026-10"): 8})
+        result = self.sync.sync()
+        self.assertEqual(result["status"], "synced", result)
+        added = next(p for p in self.products().values() if p["model"] == "M7")
+        self.assertEqual(added["brand"], "问界")
+        self.assertEqual(self.plan(added["id"])["sop"], 8)
+
+    def test_new_row_outside_merged_block_without_brand_model_is_rejected(self):
+        row = self.spec()["last_row"] + 1
         change_rows(self.path, row, insert={"C": "新增版本", self.month_col("2026-10"): 8})
         result = self.sync.sync()
         self.assertEqual(result["status"], "error", result)

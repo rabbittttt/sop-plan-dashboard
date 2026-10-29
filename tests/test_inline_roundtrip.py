@@ -285,7 +285,9 @@ class InlineRoundtripTest(unittest.TestCase):
         version_locks = [row for row in rows if any(isinstance(value, str) and value.startswith("lock:") for value in row)]
         self.assertEqual(model_lock[3], 999)
         self.assertEqual([row[3] for row in version_locks], [40, 60])
-        self.assertIn(f"A{first}:A{second}", merges)
+        brand_first = next(index for index, row in enumerate(rows, 1) if row[0] == "A")
+        brand_last = next(index for index, row in enumerate(rows, 1) if row[1] == "A 合计")
+        self.assertIn(f"A{brand_first}:A{brand_last}", merges)
         self.assertIn(f"B{first}:B{second}", merges)
         self.assertIsNone(rows[second - 1][0])
         self.assertIsNone(rows[second - 1][1])

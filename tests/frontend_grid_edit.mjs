@@ -23,6 +23,12 @@ run("let searchTimer;state=initial;owner='测试';indexData();toast=()=>{};openD
 // HTTP intranet origins may expose getRandomValues but not randomUUID.
 run('crypto.randomUUID=undefined');
 assert.match(run('gridUUID()'),/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+run('planning()');
+assert.match(nodes.get('#app').innerHTML,/class="button primary small" data-action="bulk-plan"[^>]*>网页维护/);
+assert.equal((nodes.get('#app').innerHTML.match(/data-action="bulk-plan"/g)||[]).length,1);
+assert.match(nodes.get('#app').innerHTML,/创建Excel（可选）/);
+assert.match(nodes.get('#app').innerHTML,/网页直接保存 · Excel可选/);
+assert.doesNotMatch(nodes.get('#app').innerHTML,/data-action="sync-workbook"/);
 nodes.get('#table-view-name').value='初始视图';run('saveTableView()');
 const originalView=JSON.parse(storage.get('sop-table-views-v1')).views[0];
 
@@ -90,4 +96,9 @@ assert.equal(run('range'),'annual','Working visibility must not discard saved vi
 run('applyTableView()');
 assert.equal(run("rowHidden('version','a')"),true,'Explicitly applying the named view must restore its unchanged snapshot');
 assert.equal(JSON.parse(storage.get('sop-hidden-rows-v1'))['["detail","version","a"]'],'S9 Max');
-console.log('PASS: inline grid edits, atomic payloads, uncertain retry, readonly rows, persistent hiding and saved views.');
+run("state={...initial,products:[],plans:[]};gridDraft=null;hiddenRows={};brand='';model='';query='';range='rolling';indexData();planning();bulkPlan();gridAddRow();");
+assert.equal(run('gridDraft.rows.size'),1,'An empty catalog must allow adding the first row without a workbook');
+assert.match(nodes.get('#app').innerHTML,/无需创建Excel/);
+assert.match(nodes.get('#app').innerHTML,/data-new-row=/);
+assert.equal(requests.some(r=>r.path.startsWith('/api/plan-workbook/')),false);
+console.log('PASS: direct webpage maintenance without Excel, empty-catalog row creation, inline edits, atomic payloads, uncertain retry, readonly rows, persistent hiding and saved views.');

@@ -34,6 +34,7 @@ function fixture(mode='detail') {
 async function main() {
   await fs.mkdir(out,{recursive:true});
   let state=fixture(),failure='',savedRequests=[],exportRequest=null,stateRequests=0,loseResponse=false;
+  const apiPaths=[];
   const completed=new Map();
   const browser=await chromium.launch({headless:true,channel:'msedge'});
   let page;
@@ -43,6 +44,7 @@ async function main() {
     await page.addInitScript(()=>localStorage.setItem('sop-owner','浏览器测试'));
     await page.route(`${origin}/**`,async route=>{
       const url=new URL(route.request().url());
+      if(url.pathname.startsWith('/api/'))apiPaths.push(url.pathname);
       if(url.pathname==='/api/state'){stateRequests++;return route.fulfill({json:state});}
       if(url.pathname==='/api/plan-workbook/status')return route.fulfill({json:{status:'absent',generation_view:state.generation_view}});
       if(url.pathname==='/api/settings') {
@@ -85,6 +87,15 @@ async function main() {
       assert.equal(await page.evaluate(()=>typeof crypto.randomUUID),'undefined','Exercise UUID fallback without the native method');
     }
     await page.locator('[data-action="bulk-plan"]').waitFor();
+    assert.equal(await page.locator('[data-action="bulk-plan"]').count(),1,'Direct webpage maintenance has one clear entry');
+    assert.equal(await page.locator('[data-action="bulk-plan"]').innerText(),'网页维护');
+    assert.equal(await page.locator('[data-action="bulk-plan"]').isEnabled(),true);
+    assert.ok(await page.locator('[data-action="bulk-plan"]').evaluate(el=>el.classList.contains('primary')));
+    assert.equal(await page.locator('[data-action="open-workbook"]').innerText(),'创建Excel（可选）');
+    assert.equal(await page.locator('[data-action="open-workbook"]').evaluate(el=>el.classList.contains('primary')),false);
+    assert.equal(await page.locator('[data-action="sync-workbook"]').count(),0);
+    assert.match(await page.locator('.sheet-sync').innerText(),/网页直接保存/);
+    await page.screenshot({path:path.join(out,'direct-web-maintenance.png'),fullPage:true});
     const click=action=>page.locator(`[data-action="${action}"]`).click();
     const openViews=async()=>{if(!await page.locator('#table-view-name').count())await click('view-panel');};
     const cell=(id,month)=>page.locator(`[data-grid-id="${id}"][data-grid-month="${month}"]`);
@@ -202,8 +213,29 @@ async function main() {
     await page.locator('#saved-table-view').selectOption({label:'重点车型'});
     await click('view-apply');
     assert.match(await page.locator('#toast').innerText(),/先切换代际模式/);
+
+    // A new installation with no catalog or maintenance Excel can add its first row directly.
+    state={...fixture(),products:[],plans:[]};
+    await page.evaluate(()=>{localStorage.removeItem('sop-table-views-v1');localStorage.removeItem('sop-hidden-rows-v1');});
+    await page.reload();
+    await page.locator('[data-action="bulk-plan"]').waitFor();
+    assert.equal(await page.locator('[data-action="bulk-plan"]').isEnabled(),true);
+    await click('bulk-plan');
+    assert.equal(await page.locator('#edit-dialog').evaluate(el=>el.open),false);
+    await click('grid-add');
+    const firstId=await page.locator('[data-new-row]').getAttribute('data-new-row');
+    for(const [field,value] of Object.entries({brand:'智界',model:'测试车型 2026款',version:'标准版'})) {
+      await page.locator(`[data-grid-id="${firstId}"][data-grid-field="${field}"]`).fill(value);
+    }
+    await cell(firstId,'2026-10').fill('15');
+    await click('grid-save');
+    await page.locator('#grid-owner').waitFor({state:'detached'});
+    assert.equal(state.products.length,1);
+    assert.equal(state.plans[0].sop,15);
+    assert.equal(state.workbook_sync.status,'absent');
+    assert.equal(apiPaths.some(p=>['/api/plan-workbook/open','/api/plan-workbook/export','/api/plan-workbook/download'].includes(p)),false,'Direct webpage maintenance must never create or open an Excel file');
     assert.deepEqual(errors,[]);
-    console.log(`PASS (${origin}): in-table editing, zero/blank, add/delete/undo/cancel, failure recovery, idempotent retry, draft guards, persistent hidden rows/totals, named view reload and readonly summary.`);
+    console.log(`PASS (${origin}): direct webpage maintenance without Excel, empty-catalog creation, in-table editing, zero/blank, add/delete/undo/cancel, failure recovery, idempotent retry, draft guards, persistent hidden rows/totals, named view reload and readonly summary.`);
   } catch(error) {
     if(page)await page.screenshot({path:path.join(out,'failure.png'),fullPage:true}).catch(()=>{});
     throw error;

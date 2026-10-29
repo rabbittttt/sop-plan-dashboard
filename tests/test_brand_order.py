@@ -39,6 +39,22 @@ def brands_from_sheet(sheet):
                               for cell in row if cell.value in EXPECTED))
 
 
+def assert_brand_blocks(test, sheet):
+    """Each brand spans its models, metrics and subtotal exactly once in A."""
+    areas = list(sheet.merged_cells.ranges)
+    for brand in EXPECTED:
+        labels = [row[0].row for row in sheet.iter_rows(min_row=5, max_col=1)
+                  if row[0].value == brand]
+        test.assertEqual(len(labels), 1, brand)
+        first = labels[0]
+        last = next(row[1].row for row in sheet.iter_rows(min_row=first, max_col=2)
+                    if row[1].value == brand + " 合计")
+        test.assertIn(f"A{first}:A{last}", {str(area) for area in areas}, brand)
+        intersecting = [area for area in areas if area.min_col == 1
+                        and area.min_row >= 5 and area.min_row <= last and area.max_row >= first]
+        test.assertEqual(len(intersecting), 1, brand)
+
+
 class BrandOrderTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="sop-brand-order-")
@@ -76,6 +92,13 @@ class BrandOrderTest(unittest.TestCase):
                         ids = [row["product_id"] for row in layout["rows"]
                                if row["kind"] == "product" and row["metric"] == "SOP计划量"]
                         self.assertEqual(ids, expected_ids)
+                    path = self.root / f"layout-{locks}-{versions}.xlsx"
+                    write_export_workbook({**body, "output_path": str(path)})
+                    book = openpyxl.load_workbook(path)
+                    try:
+                        assert_brand_blocks(self, book["SOP计划"])
+                    finally:
+                        book.close()
 
     def test_python_maintenance_export_parity_keeps_values_with_product_identity(self):
         maintenance, exported = payloads()
@@ -87,6 +110,8 @@ class BrandOrderTest(unittest.TestCase):
             left, right = (book["SOP计划"] for book in books)
             self.assertEqual(brands_from_sheet(left), EXPECTED)
             self.assertEqual(brands_from_sheet(right), EXPECTED)
+            assert_brand_blocks(self, left)
+            assert_brand_blocks(self, right)
             visible = maintenance["layout"]["sheets"][0]["visible_last_column"]
             self.assertEqual(list(left.iter_rows(max_col=visible, values_only=True)),
                              list(right.iter_rows(max_col=visible, values_only=True)))
@@ -159,6 +184,7 @@ class BrandOrderTest(unittest.TestCase):
         try:
             sheet = book["SOP计划"]
             self.assertEqual(brands_from_sheet(sheet), EXPECTED)
+            assert_brand_blocks(self, sheet)
             spec = fixtures.manifest(book)
             for row in spec["rows"]:
                 if row["kind"] == "product" and row.get("metric") == "SOP计划量":

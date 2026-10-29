@@ -204,9 +204,9 @@ def _layout(data):
                 if inline:
                     for field in fields:
                         block = detail_rows[field]
-                        block[0]["labels"][:2] = [brand, model]
+                        block[0]["labels"][1] = model
                         if len(block) > 1:
-                            merges.extend(f"{letter}{block[0]['row']}:{letter}{block[-1]['row']}" for letter in ("A", "B"))
+                            merges.append(f"B{block[0]['row']}:B{block[-1]['row']}")
             if next_row > model_first and not inline:
                 next(row for row in rows if row["row"] == model_first)["labels"][1] = model
                 if next_row - model_first > 1:
@@ -222,11 +222,10 @@ def _layout(data):
             row = total_row(field, model_totals[field], "brand_total", brand + (" 锁单" if field == "锁单数" else "") + " 合计")
             merge_total(row)
             brand_totals[field].append(row)
-        if not inline or not data["include_versions"]:
-            first = next(r for r in rows if r["row"] == brand_first)
-            first["labels"][0] = brand
-            if next_row - brand_first > 1:
-                merges.append(f"A{brand_first}:A{next_row - 1}")
+        first = next(r for r in rows if r["row"] == brand_first)
+        first["labels"][0] = brand
+        if next_row - brand_first > 1:
+            merges.append(f"A{brand_first}:A{next_row - 1}")
         next_row += 1
     for field in fields:
         row = total_row(field, brand_totals[field], "grand_total", "锁单总计" if field == "锁单数" else "总计")

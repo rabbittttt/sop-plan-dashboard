@@ -139,8 +139,10 @@ def parse_inline_sheet(sheet, manifest):
                 raise ValidationError(f"第 {number} 行缺少可信行标识。")
             if not any(labels) and not any(value(row, c["column"]) is not None for c in month_columns):
                 continue
+        # A newly inserted row can also sit inside a real merged brand/model
+        # block. Only inherit actual merged anchors, never ordinary blanks.
+        labels = [label_value(number, row, c) for c in (1, 2, 3)]
         if original is not None:
-            labels = [label_value(number, row, c) for c in (1, 2, 3)]
             if has_merged_detail_labels:
                 # Deleting a merged block's first version can remove its A/B
                 # anchor. The retained row's immutable ID still identifies its

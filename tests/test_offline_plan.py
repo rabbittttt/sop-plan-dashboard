@@ -80,7 +80,7 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         self.assertEqual(sheet["D1"].value, "2026-01—2027-12")
         self.assertIn("A1:C1", {str(area) for area in sheet.merged_cells.ranges})
         self.assertEqual(sheet.freeze_panes, "D5")
-        self.assertIn("A5:A6", {str(area) for area in sheet.merged_cells.ranges})
+        self.assertIn("A5:A8", {str(area) for area in sheet.merged_cells.ranges})
         self.assertIn("B5:B6", {str(area) for area in sheet.merged_cells.ranges})
         self.assertEqual(sheet["P5"].value, 0)
         self.assertEqual(sheet["P6"].value, 125)

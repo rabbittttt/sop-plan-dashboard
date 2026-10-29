@@ -23,7 +23,7 @@ SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
 # Bump this when managed workbook rendering or Excel compatibility changes
 # without changing its trusted cell map. Old exports resolve to revision 0.
-PRESENTATION_VERSION = 4
+PRESENTATION_VERSION = 5
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
@@ -225,17 +225,18 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
     for header in spec["headers"]:
         header.append(None)
     spec["headers"][1][-1] = "row_key"
-    # Keep the header/subtotal merges; detail identity gets its own safe blocks.
+    # Keep the whole-brand A merge and subtotal merges. Model labels use
+    # detail-only blocks so totals retain their own editable-row identity.
     spec["merges"] = [merge for merge in spec["merges"]
-                      if not (re.fullmatch(r"([ABC])(\d+):\1(\d+)", merge)
-                              and int(re.fullmatch(r"([ABC])(\d+):\1(\d+)", merge).group(2)) >= 5)]
+                      if not (re.fullmatch(r"([BC])(\d+):\1(\d+)", merge)
+                              and int(re.fullmatch(r"([BC])(\d+):\1(\d+)", merge).group(2)) >= 5)]
     catalog = {p["id"]: p for p in products}
     for row in spec["rows"]:
         row["key"] = "plan:" + row["product_id"] if row["kind"] == "product" else "row:" + str(row["row"])
         row["metric"] = "SOP计划量"
         if row["kind"] == "product":
             product = catalog[row["product_id"]]
-            row.update(label_a=product["brand"], label_b=product["model"], label_c=product["version"],
+            row.update(label_b=product["model"], label_c=product["version"],
                        hidden=not product.get("active", True))
             row["values"] = {month: plans.get((product["id"], month), {}).get("sop") for month in months}
         else:
@@ -255,8 +256,7 @@ def _inline_layout(products, months, editable_months, current_month, plans=None)
             detail_rows[end]["label_b"] = None
             end += 1
         if end - start > 1:
-            spec["merges"].extend(f"{letter}{first['row']}:{letter}{detail_rows[end - 1]['row']}"
-                                  for letter in ("A", "B"))
+            spec["merges"].append(f"B{first['row']}:B{detail_rows[end - 1]['row']}")
     for row in spec["rows"]:
         row["labels"] = [row.get("label_" + name) for name in "abc"]
     spec["products"] = products
@@ -912,7 +912,7 @@ class WorkbookSync:
                         self._last_digest = None
                         self._export_signature = None
                         self._input_checked = True
-                        return self._set_status("absent", "尚未建立 Excel 维护表；网页计划和导出可正常使用。点击“创建维护表”后生成。")
+                        return self._set_status("absent", "尚未建立 Excel 维护表；网页计划和导出可正常使用。点击“创建Excel（可选）”后生成。")
                     if self._last_digest is not None and not force_export:
                         return self._set_status("error", "维护表已被删除或移动，请放回原路径后重试。")
                 self._input_checked = True
