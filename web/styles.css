@@ -829,3 +829,60 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
   .annual-sheet.grid-editing .table-scroll { max-height:65vh; }
 }
 @media print { .sheet-tools,.grid-row-actions { display:none!important; } }
+
+/* Compact horizontal toolbar: primary actions, filters, then saved views. */
+.plan-titlebar { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:12px; min-height:42px; margin-bottom:4px; }
+.plan-titlebar .plan-title { grid-column:2; margin:0; font-size:22px; }
+.plan-actions { grid-column:3; justify-self:end; gap:12px; flex-wrap:nowrap; }
+.plan-file-actions { display:flex; gap:6px; }
+.plan-actions .button,.annual-toolbar .button,.saved-view-strip .button { min-height:32px; font-size:13px; }
+.plan-actions .primary { padding:5px 12px; }
+.plan-tool-icon { display:block; width:15px; height:15px; flex:0 0 15px; }
+.annual-toolbar { margin:0; padding:4px 0 7px; gap:8px 14px; border-bottom:1px solid #e1e7ef; }
+.annual-filters { gap:8px 12px; }
+.annual-filters .inline-field { gap:7px; font-size:13px; }
+.annual-filters select { min-height:32px; font-size:13px; }
+.annual-search { position:relative; }
+.annual-search .plan-tool-icon { position:absolute; left:9px; color:#74869a; pointer-events:none; }
+.annual-search input { width:180px; min-height:32px; padding-left:30px; font-size:13px; }
+.display-toggles { margin-left:auto; gap:8px; flex-wrap:nowrap; }
+.display-toggles .lock-toggle,.text-action { border-color:transparent; background:transparent; box-shadow:none; }
+.display-toggles .lock-toggle { padding:4px 5px; color:#425a76; }
+.display-toggles .lock-toggle[aria-pressed="true"] { background:transparent; border-color:transparent; color:#425a76; }
+.display-toggles .lock-toggle::before { width:14px; height:14px; flex:0 0 14px; }
+.display-toggles .lock-toggle[aria-pressed="true"]::before { line-height:14px; }
+.display-toggles .lock-toggle:hover,.text-action:hover { background:#edf2f8; border-color:transparent; }
+.text-action { color:#3c5879; }
+.muted-action { color:#65758a; }
+.tool-divider { display:inline-block; width:1px; height:18px; background:#d8e0e9; margin:0 5px; }
+.sheet-tools { min-height:43px; margin:0; padding:5px 0; gap:6px 14px; }
+.saved-view-strip { gap:5px; }
+.saved-view-strip .view-field { gap:8px; font-size:13px; }
+.view-combobox { display:flex; align-items:stretch; width:192px; height:30px; background:#fff; border:1px solid #c8cfd8; border-radius:3px; }
+.view-combobox:focus-within { outline:2px solid #1768a9; outline-offset:1px; }
+.view-combobox input#table-view-name { width:calc(100% - 30px); min-width:0; min-height:0; padding:4px 8px; border:0; outline:none; box-shadow:none; font-size:13px; }
+.view-combobox select#saved-table-view { width:30px; min-width:30px; max-width:30px; min-height:0; border:0; border-radius:0 3px 3px 0; background-color:transparent; background-position:center; padding:0; font-size:0; cursor:pointer; }
+.view-combobox select#saved-table-view option { font-size:13px; }
+.view-combobox select#saved-table-view:focus-visible { outline:2px solid #1768a9; outline-offset:-3px; }
+.saved-view-strip .text-action:disabled { opacity:.5; }
+.sheet-tools .sheet-meta { margin:0 0 0 auto; font-size:11px; gap:6px 14px; }
+.sheet-meta .sheet-sync { font-size:11px; }
+@media(max-width:1250px) {
+  .annual-filters { flex:1 1 100%; }
+  .display-toggles { margin-left:0; }
+}
+@media(max-width:700px) {
+  .plan-titlebar { grid-template-columns:1fr; gap:8px; padding:4px 0 6px; }
+  .plan-titlebar .plan-title { grid-column:1; font-size:20px; }
+  .plan-actions { grid-column:1; justify-self:center; flex-wrap:wrap; gap:8px; }
+  .annual-filters { gap:8px 12px; }
+  .annual-filters .inline-field select { max-width:180px; }
+  .annual-filters .annual-search { width:100%; }
+  .annual-search input { width:100%; }
+  .saved-view-strip { width:100%; gap:4px; }
+  .saved-view-strip .view-field { width:100%; margin-bottom:2px; }
+  .sheet-tools .sheet-meta { margin-left:0; }
+  .tool-divider { margin:0 2px; }
+  .saved-view-strip #restore-hidden-row { max-width:200px; }
+}
+@media print { .plan-titlebar { display:block; min-height:0; margin:0 0 8px; } .plan-titlebar .plan-actions { display:none!important; } }

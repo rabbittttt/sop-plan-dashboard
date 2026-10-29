@@ -24,7 +24,7 @@ run("let searchTimer;state=initial;owner='测试';indexData();toast=()=>{};openD
 run('crypto.randomUUID=undefined');
 assert.match(run('gridUUID()'),/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 run('planning()');
-assert.match(nodes.get('#app').innerHTML,/class="button primary small" data-action="bulk-plan"[^>]*>网页维护/);
+assert.match(nodes.get('#app').innerHTML,/class="button primary small" data-action="bulk-plan"[^>]*>[\s\S]*?网页维护<\/button>/);
 assert.equal((nodes.get('#app').innerHTML.match(/data-action="bulk-plan"/g)||[]).length,1);
 assert.doesNotMatch(nodes.get('#app').innerHTML,/data-action="(?:sync-workbook|open-workbook|manage-products|view-panel|view-apply)"|id="target-filter"/);
 assert.match(nodes.get('#app').innerHTML,/id="saved-table-view"/);
