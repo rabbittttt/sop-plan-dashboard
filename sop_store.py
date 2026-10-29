@@ -199,6 +199,8 @@ class SOPStore:
             label TEXT NOT NULL, plan_count INTEGER NOT NULL, payload TEXT NOT NULL,
             auto_key TEXT UNIQUE);
         CREATE TABLE IF NOT EXISTS generation_summary_history (generation TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS grid_batch_requests (
+            request_id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TRIGGER IF NOT EXISTS snapshots_no_update BEFORE UPDATE ON snapshots
           BEGIN SELECT RAISE(ABORT, 'Snapshots are immutable'); END;
         CREATE TRIGGER IF NOT EXISTS snapshots_no_delete BEFORE DELETE ON snapshots
@@ -815,6 +817,10 @@ class SOPStore:
 
     def save_plans(self, body):
         return self._save(body, "plan")
+
+    def save_grid_batch(self, body):
+        from sop_grid import save_grid_batch
+        return save_grid_batch(self, body)
 
     def _merge_workbook_catalog(self, changes, choice, current_stamp, current_month):
         """Merge existing row labels/status inside the caller's transaction.

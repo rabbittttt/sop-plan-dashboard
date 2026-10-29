@@ -247,6 +247,17 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
                         return
                 elif path == "/api/plans":
                     result = workbook_sync.save_web_plans(body) if workbook_sync else store.save_plans(body)
+                elif path == "/api/plans/batch-edit":
+                    if workbook_sync:
+                        with workbook_sync.lock:
+                            status = workbook_sync.sync()
+                            if status["status"] in {"error", "conflict"} or not workbook_sync._input_checked:
+                                self._json({"error": status["message"], "workbook_sync": status}, 409)
+                                return
+                            result = store.save_grid_batch(body)
+                            result["workbook_sync"] = workbook_sync.sync()
+                    else:
+                        result = store.save_grid_batch(body)
                 elif path == "/api/products":
                     # Preserve saved Excel edits before changing its row directory.
                     if workbook_sync:

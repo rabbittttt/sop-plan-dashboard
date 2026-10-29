@@ -728,3 +728,35 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
   .annual-sheet .plan-table th, .annual-sheet .plan-table td { min-width: 0; width: auto; padding: 4px; print-color-adjust: exact; }
   .annual-sheet .plan-table th.sticky-name, .annual-sheet .plan-table th.sticky-metric, .annual-sheet .plan-table td.sticky-metric { position: static; width: auto; min-width: 0; max-width: none; }
 }
+/* Main-table editing and browser-local saved views. */
+.saved-view-strip { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:8px 0; color:#596678; font-size:13px; }
+.saved-view-panel { padding:12px; margin-bottom:10px; border:1px solid #c8d3df; background:#f6f9fc; }
+.saved-view-panel .toolbar { flex-wrap:wrap; align-items:end; }
+.saved-view-panel .field { min-width:150px; }
+.hidden-row-list { display:flex; flex-wrap:wrap; gap:8px; padding-top:10px; color:#66717e; }
+.row-visibility { border:0; background:transparent; color:#526b86; padding:5px 7px; margin-left:5px; font-size:12px; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.row-visibility:hover { color:#075e9b; background:#e5f0fa; }
+.row-visibility:focus-visible { outline:2px solid #0871b8; outline-offset:2px; }
+.grid-toolbar { border:1px solid #0871b8; background:#edf6ff; padding:12px; margin-bottom:10px; }
+.grid-toolbar .toolbar { flex-wrap:wrap; align-items:end; }
+.grid-toolbar p { margin:8px 0 0; font-size:13px; color:#425a70; }
+.grid-toolbar .field { min-width:120px; max-width:240px; }
+.grid-toolbar .inline-error:empty { display:none; }
+.annual-sheet.grid-editing { --plan-name-width:320px; --plan-month-width:78px; }
+.grid-editing .plan-table .version-row .sticky-name { padding:7px 10px; }
+.grid-row-labels { display:grid; grid-template-columns:60px 1fr 1fr; gap:6px; }
+.grid-row-labels label { display:flex; flex-direction:column; gap:2px; min-width:0; text-align:left; }
+.grid-row-labels label span { font-size:12px; color:#54677a; font-weight:400; }
+.grid-row-labels input { width:100%; min-width:0; height:32px; padding:4px 5px; border:1px solid #a6bacb; border-radius:3px; background:white; font-size:13px; font-weight:500; }
+.grid-row-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; font-size:12px; }
+.grid-row-actions strong { color:#a3332b; }
+.annual-sheet .grid-row-actions small { margin:0; white-space:normal; font-size:12px; }
+.grid-row-actions .button { min-height:28px; padding:3px 6px; font-size:12px; }
+.annual-sheet .grid-quantity { box-sizing:border-box; width:100%; min-width:0; height:36px; padding:4px; text-align:right; border:1px solid #9fb2c7; border-radius:3px; background:white; color:#172a41; font-size:15px; font-weight:700; }
+.grid-quantity.changed,.grid-row-labels input.changed { background:#fff4ce; border-color:#bc8b16; }
+.grid-quantity:focus,.grid-row-labels input:focus { outline:2px solid #0871b8; outline-offset:1px; }
+.grid-quantity[aria-invalid=true],.grid-row-labels input[aria-invalid=true] { border:2px solid #b12525; background:#fff0ee; }
+.grid-new-row th,.grid-new-row td { border-top:1px solid #82a9ca; }
+.grid-toolbar button:disabled,.grid-quantity:disabled,.grid-row-labels input:disabled { opacity:.65; cursor:not-allowed; }
+@media(max-width:700px) { .annual-sheet.grid-editing { --plan-name-width:245px; --plan-metric-width:65px; } .grid-row-labels { grid-template-columns:50px 1fr; } .grid-row-labels label:last-child { grid-column:1/-1; } }
+@media print { .saved-view-strip,.saved-view-panel,.grid-toolbar,.row-visibility { display:none!important; } }
