@@ -91,18 +91,17 @@ async function main() {
     assert.equal(await page.locator('[data-action="bulk-plan"]').innerText(),'网页维护');
     assert.equal(await page.locator('[data-action="bulk-plan"]').isEnabled(),true);
     assert.ok(await page.locator('[data-action="bulk-plan"]').evaluate(el=>el.classList.contains('primary')));
-    assert.equal(await page.locator('[data-action="open-workbook"]').innerText(),'创建Excel（可选）');
-    assert.equal(await page.locator('[data-action="open-workbook"]').evaluate(el=>el.classList.contains('primary')),false);
-    assert.equal(await page.locator('[data-action="sync-workbook"]').count(),0);
-    assert.match(await page.locator('.sheet-sync').innerText(),/网页直接保存/);
+    assert.equal(await page.locator('[data-action="open-workbook"],[data-action="manage-products"],#target-filter,[data-action="view-panel"]').count(),0);
+    assert.equal(await page.locator('#table-view-name').isVisible(),true);
+    assert.equal(await page.locator('[data-action="view-save"]').isVisible(),true);
+    assert.equal(await page.locator('[data-action="rows-restore"]').isVisible(),true);
     await page.screenshot({path:path.join(out,'direct-web-maintenance.png'),fullPage:true});
-    const click=async action=>{await page.locator(`[data-action="${action}"]`).click();if(action==='bulk-plan')await page.locator('#grid-level').selectOption('version');};
-    const openViews=async()=>{if(!await page.locator('#table-view-name').count())await click('view-panel');};
+    const click=async action=>{await page.locator(`[data-action="${action}"]`).click();if(action==='bulk-plan'&&!await page.evaluate(()=>allExpanded))await page.locator('[data-action="expand-all"]').click();};
+    const openViews=async()=>assert.equal(await page.locator('#table-view-name').isVisible(),true);
     const cell=(id,month)=>page.locator(`[data-grid-id="${id}"][data-grid-month="${month}"]`);
     await openViews();
     await page.locator('#table-view-name').fill('初始视图');
     await click('view-save');
-    await click('view-panel');
     await click('bulk-plan');
     await page.locator('#grid-owner').waitFor();
     assert.equal(await page.locator('#edit-dialog').evaluate(el=>el.open),false,'Batch edit must remain inside the main table');
@@ -121,10 +120,10 @@ async function main() {
     assert.match(await page.locator('[data-grid-remove="old"]').innerText(),/删除/);
     await page.locator('[data-grid-remove="old"]').click();
     await page.locator('[data-grid-id="b"][data-grid-field="version"]').fill('Ultra改名');
-    await click('grid-add');
+    await page.locator('[data-grid-anchor="享界|S9 2026款"]').click();
     const newId=await page.locator('[data-new-row]').last().getAttribute('data-new-row');
     const newField=field=>page.locator(`[data-grid-id="${newId}"][data-grid-field="${field}"]`);
-    await newField('brand').fill('享界');await newField('model').fill('S9 2026款');await newField('version').fill('新增Lite');
+    await newField('version').fill('新增Lite');
     await cell(newId,'2026-10').fill('5');
     const requestsBefore=stateRequests;
     await page.locator('#refresh-btn').click();
@@ -175,7 +174,7 @@ async function main() {
     assert.equal(state.plans.find(p=>p.product_id==='a'&&p.month==='2026-10').sop,0);
 
     // Hide versions/models, preserve totals, save and reload the named view.
-    const hiddenBefore=Number((await page.locator('.saved-view-strip').innerText()).match(/已隐藏(\d+)组/)?.[1]||0);
+    const hiddenBefore=Number((await page.locator('[data-action=rows-restore]').innerText()).match(/（(\d+)）/)?.[1]||0);
     if(!await page.locator('[data-hide-level="version"][data-hide-id="a"]').count())await click('expand-all');
     const totalBefore=await page.locator('tr.total-row.metric-plan-row').innerText();
     await page.locator('[data-hide-level="version"][data-hide-id="a"]').first().click();
@@ -189,7 +188,7 @@ async function main() {
     await page.reload();
     await page.locator('[data-action="bulk-plan"]').waitFor();
     assert.equal(await page.locator('[data-version="a"],[data-version="x"]').count(),0);
-    assert.match(await page.locator('.saved-view-strip').innerText(),new RegExp(`已隐藏${hiddenBefore+2}组`));
+    assert.match(await page.locator('[data-action=rows-restore]').innerText(),new RegExp(`（${hiddenBefore+2}）`));
     await openViews();
     await click('rows-restore');
     assert.ok(await page.locator('[data-version="a"]').count()>0);
@@ -197,7 +196,6 @@ async function main() {
     assert.ok(await page.locator('[data-version="old"]').count()>0,'Restoring hidden rows reveals preserved inactive history');
     assert.equal(state.products.find(p=>p.id==='old').active,false,'Restoring visibility must not reactivate the product');
     await page.locator('#saved-table-view').selectOption({label:'重点车型'});
-    await click('view-apply');
     assert.equal(await page.locator('[data-version="a"],[data-version="x"],[data-version="old"]').count(),0,'Applying a named view restores its saved hidden rows');
     await click('rows-restore');
 
@@ -210,9 +208,7 @@ async function main() {
     await page.screenshot({path:path.join(out,'editing-summary-narrow.png'),fullPage:true});
     await click('grid-cancel');
     await openViews();
-    await page.locator('#saved-table-view').selectOption({label:'重点车型'});
-    await click('view-apply');
-    assert.match(await page.locator('#toast').innerText(),/先切换代际模式/);
+    assert.notEqual(await page.locator('#saved-table-view option').filter({hasText:'重点车型'}).getAttribute('disabled'),null);
 
     // Model-year entry is the default; details survive zero and clear overrides.
     state=fixture();
@@ -227,7 +223,7 @@ async function main() {
     const beforeDetails=JSON.stringify(state.plans.filter(p=>p.product_id==='a'||p.product_id==='b'));
     for(const [input,total] of [['500',640],['0',140],['',440]]) {
       await page.locator('[data-action="bulk-plan"]').click();
-      assert.equal(await page.locator('#grid-level').inputValue(),'model');
+      assert.equal(await page.locator('#grid-level').count(),0);
       assert.equal(await page.locator('[data-version="a"]').count(),0);
       assert.equal(await modelCell().getAttribute('placeholder'),'汇总300');
       await modelCell().fill(input);
@@ -243,6 +239,44 @@ async function main() {
     await page.screenshot({path:path.join(out,'compact-models.png'),fullPage:true});
     assert.equal(state.products.filter(p=>p.plan_level==='model').length,1);
     console.log('PASS: model-year default, total override, zero, clear fallback, unchanged details, compact layout and reload persistence.');
+
+    // Numeric-cell shortcuts and model/version edits use the same main-table session.
+    await click('expand-all');
+    await page.locator('[data-hide-level="version"][data-hide-id="b"]').first().click();
+    await page.locator('[data-edit="a"][data-month="2026-10"]').click();
+    await cell('a','2026-10').waitFor();
+    assert.equal(await page.locator('#edit-dialog').evaluate(el=>el.open),false);
+    assert.equal(await page.locator('#grid-level').count(),0);
+    const groupId='享界|S9 2026款';
+    await page.locator(`[data-grid-group="${groupId}"][data-grid-group-field="model"]`).fill('S9 更新 2026款');
+    await page.locator(`[data-grid-anchor="${groupId}"]`).click();
+    const inlineId=await page.locator('[data-new-row]').last().getAttribute('data-new-row');
+    await page.locator(`[data-grid-id="${inlineId}"][data-grid-field="version"]`).fill('新增Plus');
+    await cell(inlineId,'2026-10').fill('25');
+    await page.locator(`[data-grid-remove-model="${groupId}"]`).click();
+    assert.equal(await cell('a','2026-10').isDisabled(),true);
+    assert.deepEqual(await page.evaluate(()=>gridPayload().entries),[]);
+    await page.locator(`[data-grid-remove-model="${groupId}"]`).click();
+    await page.locator(`[data-expand="${groupId}"]`).click();
+    assert.equal(await page.locator('[data-version="a"]').count(),0);
+    await page.locator(`[data-expand="${groupId}"]`).click();
+    await click('toggle-locks');
+    assert.equal(await cell(inlineId,'2026-10').inputValue(),'25');
+    await click('grid-save');
+    await page.locator('#grid-owner').waitFor({state:'detached'});
+    assert.ok(savedRequests.at(-1).catalog_changes.some(c=>c.id==='b'&&c.model==='S9 更新 2026款'),'Renaming includes the hidden version');
+    assert.equal(savedRequests.at(-1).entries[0].model,'S9 更新 2026款');
+    assert.equal(state.products.find(p=>p.id==='old').model,'S9 2024款','A different year stays independent');
+    await page.locator('[data-action="bulk-plan"]').click();
+    await page.locator('[data-grid-remove-model="享界|S9 更新 2026款"]').click();
+    await click('grid-save');
+    await page.locator('#grid-owner').waitFor({state:'detached'});
+    assert.equal(await page.locator('[data-expand="享界|S9 更新 2026款"]').count(),0);
+    assert.ok(state.products.filter(p=>p.model==='S9 更新 2026款').every(p=>p.active===false));
+    await page.locator('#restore-hidden-row').selectOption({label:'S9 更新 2026款（已停用）'});
+    assert.equal(await page.locator('[data-expand="享界|S9 更新 2026款"]').count(),1);
+    assert.equal(state.products.find(p=>p.id==='a').active,false,'Restore visibility does not reactivate a model');
+    console.log('PASS: one inline editing path, whole-model rename/delete/undo, hidden members, year isolation and single-row restore.');
 
     // A new installation with no catalog or maintenance Excel can add its first row directly.
     state={...fixture(),products:[],plans:[]};
@@ -265,6 +299,9 @@ async function main() {
     assert.equal(state.plans[0].sop,15);
     assert.equal(state.workbook_sync.status,'absent');
     assert.equal(apiPaths.some(p=>['/api/plan-workbook/open','/api/plan-workbook/export','/api/plan-workbook/download'].includes(p)),false,'Direct webpage maintenance must never create or open an Excel file');
+    await page.setViewportSize({width:375,height:812});
+    await page.screenshot({path:path.join(out,'compact-mobile.png'),fullPage:true});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Small screens scroll the table, not the whole page');
     assert.deepEqual(errors,[]);
     console.log(`PASS (${origin}): direct webpage maintenance without Excel, empty-catalog creation, in-table editing, zero/blank, add/delete/undo/cancel, failure recovery, idempotent retry, draft guards, persistent hidden rows/totals, named view reload and readonly summary.`);
   } catch(error) {

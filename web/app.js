@@ -23,7 +23,7 @@ let planIndex = new Map(), salesIndex = new Map(), shipmentIndex = new Map();
 let owner = localStorage.getItem('sop-owner') || '';
 let matchMonth = '', matchProduct = '', comparison = null, activeRequest = 0;
 let generationSwitchPending = false, generationViewError = '';
-let gridDraft=null, viewPanelOpen=false, viewsRestored=false;
+let gridDraft=null, viewsRestored=false, viewNameDraft=null;
 const modelPlanLabel='车型总量（不分版本）';
 const isModelPlan=p=>p?.plan_level==='model'||p?.version===modelPlanLabel;
 const modelGroupKey=p=>`${p.brand}|${p.model}`;
@@ -66,30 +66,64 @@ function restoreInitialView(){
 }
 function viewControls(){
   const entries=Object.entries(hiddenRows).filter(([k])=>{try{return JSON.parse(k)[0]===generationMode();}catch{return false;}});
-  return `<div class="saved-view-strip"><button type="button" class="button small" data-action="view-panel" aria-expanded="${viewPanelOpen}">视图与隐藏行${entries.length?` · 已隐藏${entries.length}组`:''}</button><span>隐藏仅影响展示，合计含隐藏行</span></div>${viewPanelOpen?`<section class="saved-view-panel" aria-label="保存视图与恢复隐藏行"><div class="toolbar"><label class="field">已存视图（当前浏览器）<select id="saved-table-view"><option value="">请选择</option>${tableViews.views.map(v=>opt(v.id,v.name,selectedView)).join('')}</select></label>${button('应用视图','view-apply','small')}${button('删除视图','view-delete','small')}<label class="field">视图名称<input id="table-view-name" maxlength="60" value="${esc(tableViews.views.find(v=>v.id===selectedView)?.name||'')}" placeholder="如：本月重点车型"></label>${button('保存当前视图','view-save','primary small')}${button('恢复全部隐藏行','rows-restore','small')}</div><div class="hidden-row-list">${entries.length?entries.map(([k,label])=>`<button type="button" class="button small" data-restore-row="${esc(k)}">恢复 ${esc(label)}</button>`).join(''):'没有隐藏行'}</div><p class="form-help">保存隐藏行、筛选、月份范围和展开状态；重新打开本浏览器可继续使用。切换到相同代际模式后可应用对应视图。行隐藏不改变Excel导出范围，请在导出选项中选择范围。</p></section>`:''}`;
+  const active=tableViews.views.find(v=>v.id===selectedView),applied=active&&JSON.stringify(active.config)===JSON.stringify(viewConfig());
+  return `<div class="saved-view-strip" role="group" aria-label="保存视图与恢复隐藏行"><label class="field inline-field">已存视图<select id="saved-table-view" title="选择后立即应用；保存在当前浏览器"><option value="">当前视图</option>${tableViews.views.map(v=>`<option value="${esc(v.id)}" ${v.id===selectedView&&applied?'selected':''} ${v.config.generation_mode!==generationMode()?'disabled':''}>${esc(v.name)}${v.config.generation_mode!==generationMode()?`（${generationModeLabel(v.config.generation_mode)}）`:''}</option>`).join('')}</select></label><label class="field inline-field view-name"><span class="visually-hidden">视图名称</span><input id="table-view-name" maxlength="60" value="${esc(viewNameDraft??active?.name??'')}" placeholder="视图名称"></label>${button('保存视图','view-save','small')}${button('删除视图','view-delete','small',selectedView?'':'disabled')}${button(`恢复隐藏行${entries.length?`（${entries.length}）`:''}`,'rows-restore','small',`${entries.length?'':'disabled'} title="恢复全部隐藏行；隐藏不改变合计"`)}${entries.length?`<label class="field inline-field"><span class="visually-hidden">恢复单行</span><select id="restore-hidden-row" title="选择一行即可恢复"><option value="">恢复单行…</option>${entries.map(([k,label])=>opt(k,label,'')).join('')}</select></label>`:''}</div>`;
 }
-function saveTableView(){const name=$('#table-view-name').value.trim();if(!name)throw new Error('请填写视图名称');const existing=tableViews.views.find(v=>v.name===name);const id=existing?.id||gridUUID();const view={id,name,config:viewConfig()};tableViews.views=tableViews.views.filter(v=>v.id!==id);tableViews.views.push(view);tableViews.active=id;selectedView=id;persistTableViews();const saved=persistHiddenRows();planning();toast(saved?'视图已保存在当前浏览器':'命名视图已保存，但浏览器未能记住当前隐藏状态',!saved);}
-function applyTableView(){const view=tableViews.views.find(v=>v.id===selectedView);if(!view)throw new Error('请先选择一个已存视图');if(view.config.generation_mode!==generationMode())throw new Error(`该视图使用${generationModeLabel(view.config.generation_mode)}，请先切换代际模式再应用`);restoreViewConfig(view.config);tableViews.active=view.id;persistTableViews();const saved=persistHiddenRows();planning();toast(saved?'已应用保存的视图':'视图已应用，但浏览器未能记住当前隐藏状态',!saved);}
+function saveTableView(){const name=$('#table-view-name').value.trim();if(!name)throw new Error('请填写视图名称');const existing=tableViews.views.find(v=>v.name===name);const id=existing?.id||gridUUID();const view={id,name,config:viewConfig()};tableViews.views=tableViews.views.filter(v=>v.id!==id);tableViews.views.push(view);tableViews.active=id;selectedView=id;viewNameDraft=null;persistTableViews();const saved=persistHiddenRows();planning();toast(saved?'视图已保存在当前浏览器':'命名视图已保存，但浏览器未能记住当前隐藏状态',!saved);}
+function applyTableView(){const view=tableViews.views.find(v=>v.id===selectedView);if(!view)throw new Error('请先选择一个已存视图');if(view.config.generation_mode!==generationMode())throw new Error(`该视图使用${generationModeLabel(view.config.generation_mode)}，请先切换代际模式再应用`);restoreViewConfig(view.config);viewNameDraft=null;tableViews.active=view.id;persistTableViews();const saved=persistHiddenRows();planning();toast(saved?'已应用保存的视图':'视图已应用，但浏览器未能记住当前隐藏状态',!saved);}
 function gridLocked(){return !!(gridDraft?.saving||gridDraft?.uncertain);}
 function gridRow(id){return gridDraft?.rows.get(id);}
 function gridRender(){const scroll=$('.plan-card .table-scroll'),position=scroll?{left:scroll.scrollLeft,top:scroll.scrollTop}:null;planning();const next=$('.plan-card .table-scroll');if(next&&position){next.scrollLeft=position.left;next.scrollTop=position.top;}}
-function gridLabel(row){const locked=gridLocked()||row.deleted;return `<div class="grid-row-labels${row.isModel?' model-labels':''}">${(row.isModel?['brand','model']:['brand','model','version']).map((field,i)=>`<label><span>${['品牌',row.original?.source_generation?'车型名称':'车型 / 年款','版本'][i]}</span><input data-grid-id="${esc(row.id)}" data-grid-field="${field}" value="${esc(row[field])}" maxlength="200" aria-label="${['品牌','车型年款','版本'][i]} ${esc(row.original?.version||'新增行')}" ${locked?'disabled':''}></label>`).join('')}</div><div class="grid-row-actions">${row.deleted?'<strong>待停用</strong>':''}<button type="button" class="button small" data-grid-remove="${esc(row.id)}" ${gridLocked()?'disabled':''}>${row.deleted?'撤销删除':row.isNew?'移除新增行':'删除行（停用）'}</button>${row.original?.source_generation?`<small>${esc(row.original.source_generation)}</small>`:''}</div>`;}
+function gridLabel(row){
+  const locked=gridLocked()||row.deleted,fields=row.isModel?['brand','model']:(row.original||row.anchor)?['version']:['brand','model','version'];
+  const labels={brand:'品牌',model:'车型＋年款',version:'版本'};
+  return `<div class="grid-row-labels${row.isModel?' model-labels':fields.length===1?' version-labels':''}">${fields.map(field=>`<label><span class="${fields.length===1?'visually-hidden':''}">${labels[field]}</span><input data-grid-id="${esc(row.id)}" data-grid-field="${field}" value="${esc(row[field])}" maxlength="200" aria-label="${labels[field]} ${esc(row.original?.version||'新增行')}" ${locked?'disabled':''}></label>`).join('')}<button type="button" class="button small grid-remove" data-grid-remove="${esc(row.id)}" title="删除按停用处理，保留历史" ${gridLocked()||gridDraft?.groups.get(row.group)?.deleted?'disabled':''}>${row.deleted?'撤销删除':row.isNew?'移除':'删除行'}</button></div>`;
+}
+function gridModelLabel(id,isOpen){
+  const group=gridDraft.groups.get(id),disabled=gridLocked()||group.deleted;
+  return `<div class="grid-row-labels model-labels">${['brand','model'].map(field=>`<label><span>${field==='brand'?'品牌':'车型＋年款'}</span><input data-grid-group="${esc(id)}" data-grid-group-field="${field}" value="${esc(group[field])}" maxlength="200" aria-label="${field==='brand'?'品牌':'车型＋年款'} ${esc(id)}" ${disabled?'disabled':''}></label>`).join('')}</div><div class="grid-row-actions"><button type="button" class="button small" data-expand="${esc(id)}" aria-expanded="${isOpen}" ${gridLocked()?'disabled':''}>${isOpen?'收起版本':'展开版本'}</button><button type="button" class="button small" data-grid-add-brand="${esc(group.brand)}" data-grid-add-model="${esc(group.model)}" data-grid-anchor="${esc(id)}" ${disabled?'disabled':''}>新增版本</button><button type="button" class="button small" data-grid-remove-model="${esc(id)}" title="停用该车型下全部计划行，包含隐藏版本；历史保留" ${gridLocked()?'disabled':''}>${group.deleted?'撤销删除':'删除车型'}</button></div>`;
+}
+function gridChangeModel(id,field,value){
+  const group=gridDraft?.groups.get(id);if(!group||gridLocked()||group.deleted||!['brand','model'].includes(field))return;
+  group[field]=value;
+  for(const row of gridDraft.rows.values())if(row.group===id||row.anchor===id)row[field]=value;
+  gridDraft.request=null;
+}
+function gridRemoveModel(id){
+  const group=gridDraft?.groups.get(id);if(!group||gridLocked())return;
+  if(!group.deleted){group.beforeDelete=new Map();for(const row of gridDraft.rows.values())if(row.group===id||row.anchor===id){group.beforeDelete.set(row.id,row.deleted);row.deleted=true;}group.deleted=true;}
+  else {for(const [rid,deleted] of group.beforeDelete)if(gridRow(rid))gridRow(rid).deleted=deleted;group.deleted=false;}
+  gridDraft.request=null;gridRender();
+}
+function toggleModel(id){
+  if(allExpanded){allExpanded=false;expanded=new Set(products().map(modelGroupKey));expanded.delete(id);}
+  else if(expanded.has(id))expanded.delete(id);else expanded.add(id);
+  gridDraft?gridRender():planning();
+}
 function gridCell(row,month){
   const value=Object.hasOwn(row.values,month)?row.values[month]:(row.baselines[month]?.sop??''),old=row.baselines[month]?.sop??'';
   const fallback=row.isModel?sumPlan(state.products.filter(p=>!isModelPlan(p)&&p.brand===row.brand&&p.model===row.model),month,'sop').value:null;
   return `<input class="grid-quantity${String(value)!==String(old)?' changed':''}" data-grid-id="${esc(row.id)}" data-grid-month="${month}"${row.isModel?` data-grid-model="${esc(row.model)}"`:''} inputmode="numeric" value="${esc(value)}" aria-label="${esc(row.isModel?row.model:row.version||'新增版本')} ${month} SOP计划量" placeholder="${fallback==null?'—':`汇总${fmt(fallback)}`}"${row.isModel?' title="填写车型总量；留空时使用版本汇总，0表示明确零值"':''} ${gridLocked()||row.deleted?'disabled':''}>`;
 }
-function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="表内批量维护"><div class="toolbar"><label class="field">维护粒度<select id="grid-level" ${gridLocked()?'disabled':''}>${opt('model','车型＋年款',gridDraft.level)}${opt('version','版本',gridDraft.level)}</select></label><label class="field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''}></label><label class="field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${button(gridDraft.level==='model'?'新增车型':'新增版本','grid-add','small',gridLocked()?'disabled':'')}${button(gridDraft.saving?'正在保存…':gridDraft.uncertain?'重试确认保存':'保存全部修改','grid-save','primary small',gridDraft.saving?'disabled':'')}${button('取消本轮修改','grid-cancel','small',gridLocked()?'disabled':'')}</div><p>网页直接保存，无需创建Excel。车型总量优先；清空车型量后按版本汇总。0为零值，空白待维护；合计在保存后更新。${gridDraft.level==='model'?'填写车型行即可，版本无需拆分。':'有车型总量的月份，版本量仅作明细参考。'}</p><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
+function gridToolbar(){if(!gridDraft)return '';return `<section class="grid-toolbar" aria-label="网页维护"><div class="toolbar"><label class="field inline-field">维护人<input id="grid-owner" maxlength="100" value="${esc(gridDraft.owner)}" ${gridLocked()?'disabled':''}></label><label class="field inline-field">调整原因<input id="grid-reason" maxlength="200" value="${esc(gridDraft.reason)}" ${gridLocked()?'disabled':''}></label>${button('新增车型','grid-add','small',gridLocked()?'disabled':'')}<span class="grid-hint">车型填总量，展开改版本；总量优先，留空按版本汇总。合计在保存后更新。</span></div><div id="grid-error" class="inline-error" role="alert">${esc(gridDraft.error||'')}</div></section>`;}
 function gridNewRows(anchor,visible){if(!gridDraft)return '';return [...gridDraft.rows.values()].filter(row=>row.isNew&&!row.virtual&&row.anchor===anchor).map(row=>`<tr class="version-row metric-plan-row grid-new-row" data-new-row="${esc(row.id)}"><th class="sticky-name" scope="row">${gridLabel(row)}</th><td class="sticky-metric">SOP计划量</td>${visible.map(m=>`<td class="sop-cell number${m<state.current_month?' past-month':''}">${isPlanMonthOpen(m)?gridCell(row,m):'未开放'}</td>${range==='rolling'&&m.endsWith('-12')?'<td class="annual-total">保存后计算</td>':''}`).join('')}${range==='rolling'?'':'<td class="annual-total">保存后计算</td>'}</tr>`).join('');}
-function gridAddRow(b=brand,m=model,anchor=''){if(!gridDraft||gridLocked())return;const id='new_'+gridUUID(),isModel=gridDraft.level==='model'&&!anchor;gridDraft.rows.set(id,{id,isNew:true,isModel,brand:b||'',model:m||'',version:isModel?modelPlanLabel:'',anchor,values:{},baselines:{},deleted:false});gridDraft.request=null;gridRender();$(`[data-grid-id="${id}"][data-grid-field="${isModel?'model':'version'}"]`)?.focus();}
+function gridAddRow(b=brand,m='',anchor=''){if(!gridDraft||gridLocked()||gridDraft.groups.get(anchor)?.deleted)return;const group=gridDraft.groups.get(anchor);if(group){b=group.brand;m=group.model;}const id='new_'+gridUUID(),isModel=!anchor;gridDraft.rows.set(id,{id,isNew:true,isModel,brand:b||'',model:m||'',version:isModel?modelPlanLabel:'',anchor,values:{},baselines:{},deleted:false});if(anchor)expanded.add(anchor);gridDraft.request=null;gridRender();$(`[data-grid-id="${id}"][data-grid-field="${isModel?'model':'version'}"]`)?.focus();}
 function gridRemoveRow(id){if(!gridDraft||gridLocked())return;const row=gridRow(id);if(!row)return;if(row.isNew)gridDraft.rows.delete(id);else row.deleted=!row.deleted;gridDraft.request=null;gridRender();}
 function gridQuantity(value){if(value===''||value==null)return null;if(!/^\d+$/.test(String(value).trim()))throw new Error('计划量只能填写非负整数，留空表示待维护');const number=Number(value);if(!Number.isSafeInteger(number)||number>1e12)throw new Error('计划量超出允许范围');return number;}
 function gridPayload(){
   const changes=[],catalog_changes=[],entries=[];const fail=(row,field,message)=>{const element=$(`[data-grid-id="${row.id}"][${field.startsWith('20')?'data-grid-month':'data-grid-field'}="${field}"]`);element?.setAttribute('aria-invalid','true');element?.focus();throw new Error(message);};
   if(!gridDraft.owner.trim())throw new Error('请填写维护人');
+  for(const group of gridDraft.groups.values()){
+    if(group.deleted)continue;
+    const suffix=group.id.match(/(?:^|\s)(20\d{2}款.*)$/)?.[1];
+    if(!group.brand.trim()||!group.model.trim()||(suffix&&(!group.model.trim().endsWith(' '+suffix)||!group.model.trim().slice(0,-suffix.length).trim()))){
+      const field=!group.brand.trim()?'brand':'model';$$('[data-grid-group]').find(el=>el.dataset.gridGroup===group.id&&el.dataset.gridGroupField===field)?.focus();
+      throw new Error(suffix?`请填写品牌和车型名称，并保留年款“${suffix}”；其他年款请新增车型`:'请填写品牌和车型名称');
+    }
+  }
   for(const row of gridDraft.rows.values()){
     if(row.virtual&&!Object.values(row.values).some(value=>value!==''&&value!=null))continue;
-    if(row.deleted){const plan_revisions=Object.fromEntries(Object.entries(row.baselines).map(([m,p])=>[m,p.revision||0]));catalog_changes.push({id:row.id,revision:row.original.revision||0,active:false,plan_revisions});continue;}
+    if(row.deleted){if(row.isNew)continue;const plan_revisions=Object.fromEntries(Object.entries(row.baselines).map(([m,p])=>[m,p.revision||0]));catalog_changes.push({id:row.id,revision:row.original.revision||0,active:false,plan_revisions});continue;}
     for(const field of (row.isModel?['brand','model']:['brand','model','version']))if(!row[field].trim())fail(row,field,'请完整填写品牌、车型年款；版本维护时还需填写版本');
     const plans=[];
     for(const [month,value] of Object.entries(row.values)){
@@ -109,7 +143,9 @@ async function saveGrid(){
     if(!response.ok){const error=new Error(result.error||'保存失败');error.definite=response.status>=400&&response.status<500&&response.status!==408&&response.status!==429;throw error;}
     if(!result.ok)throw new Error('无法确认保存结果，请重试确认');
     for(const c of payload.catalog_changes.filter(c=>c.active===false)){const p=gridRow(c.id)?.original;hiddenRows[rowViewKey('version',c.id)]=p?`${p.model} · ${p.version}（已停用）`:c.id;}
+    for(const group of gridDraft.groups.values())if(group.deleted)hiddenRows[rowViewKey('model',group.id)]=group.model+'（已停用）';
     const hiddenSaved=persistHiddenRows();owner=payload.owner;gridDraft=null;
+    if(payload.catalog_changes.some(c=>'brand' in c||'model' in c)){brand='';model='';query='';}
     try{localStorage.setItem('sop-owner',owner);}catch{/* Business save already succeeded; storage failure must not trigger a retry. */}
     await load();toast(`已保存计划${result.saved_count||0}项，新增${result.created_count||0}行，停用${result.deactivated_count||0}行${result.workbook_sync&&['error','conflict','pending'].includes(result.workbook_sync.status)?'；Excel等待同步':''}${hiddenSaved?'':'；浏览器未能记住隐藏行设置'}`,!hiddenSaved);
   }catch(error){if(!gridDraft){toast('已保存，页面刷新失败，请点击刷新数据',true);return;}gridDraft.saving=false;gridDraft.uncertain=!error.definite;gridDraft.error=error.message+(error.definite?'；修改仍保留，可取消后刷新核对。':'；保存结果尚未确认，请重试原请求，避免重复新增。');if(error.definite)gridDraft.request=null;gridRender();}
@@ -222,8 +258,8 @@ function metricLabel() { return (state.meta.metrics||[]).find(m=>m.id===metric)?
 function months() { return range==='rolling' ? Array.from({length:12},(_,i)=>shift(state.current_month,i-5)) : yearMonths(); }
 function historyMonths() { if(historyRange==='all') return [...new Set(state.sales.map(s=>s.month))].filter(m=>m<state.current_month).sort(); return state.history_months || [-3,-2,-1].map(n=>shift(state.current_month,n)); }
 function productGenerations(p) { return p.source_generations?.length?p.source_generations:p.generation?[p.generation]:[]; }
-function lockToggleLabel() { return `锁单数：${showLocks?'已显示':'已隐藏'}`; }
-function wenjieToggleLabel() { return `问界：${showWenjie?'已显示':'已隐藏'}`; }
+function lockToggleLabel() { return '显示锁单'; }
+function wenjieToggleLabel() { return '显示问界'; }
 function latestVersionLockMonth() {
   return (state.sales||[]).filter(r=>r.metric==='locked_orders'&&r.value!=null).map(r=>r.month).sort().at(-1)||'';
 }
@@ -300,11 +336,11 @@ function planMetricRow(ps,label,level,id,visibleMonths,field,{isOpen=false,showN
   const isLock=field==='locks';
   const versionCount=ps.filter(p=>!isModelPlan(p)).length,versionNote=versionCount?`${versionCount}版本`:'车型计划';
   let labelContent=one?`<button class="row-link" data-detail="${p.id}">${esc(label)}</button>${p.read_only?'<small>自动汇总 · 只读</small>':p.active===false?'<small>已停用</small>':''}${p.name_conflict?'<small class="catalog-alert">同名待区分</small>':''}`:level==='model'?`<button class="row-toggle" data-expand="${esc(id)}" aria-expanded="${isOpen}"><span>${isOpen?'−':'+'}</span>${esc(label)} <em>${versionNote}</em></button>`:`<strong>${esc(label)}</strong> <small>${versionNote}</small>`;
-  const modelDraft=level==='model'&&gridDraft?.level==='model'?gridRow(gridDraft.modelRows.get(id)):null;
-  const draftRow=one&&gridDraft?.level==='version'?gridRow(p.id):modelDraft;
+  const modelDraft=level==='model'&&gridDraft?gridRow(gridDraft.modelRows.get(id)):null;
+  const draftRow=one&&gridDraft?gridRow(p.id):modelDraft;
   if(draftRow&&one&&!isLock)labelContent=gridLabel(draftRow);
+  if(modelDraft&&showName)labelContent=gridModelLabel(id,isOpen);
   if(!gridDraft&&level!=='total'&&showName)labelContent+=hiddenControl(level,id,one?`${p.model} · ${p.version}`:label);
-  if(gridDraft?.level==='version'&&level==='model'&&showName&&ps.some(p=>!p.read_only))labelContent+=`<button type="button" class="button small" data-grid-add-brand="${esc(ps[0].brand)}" data-grid-add-model="${esc(label)}" data-grid-anchor="${esc(id)}" ${gridLocked()?'disabled':''}>＋版本行</button>`;
   const cells=visibleMonths.map(m=>{
     const past=m<state.current_month?' past-month':'';
     let cell;
@@ -336,6 +372,7 @@ function planVersionRows(ps,visibleMonths) {
 }
 function workbookStrip() {
   const w=state.workbook_sync||{},bad=['conflict','error'].includes(w.status);
+  if(!w.status||w.status==='absent')return '';
   const synced=w.status==='synced',label=bad?'Excel同步待处理':({synced:'Excel已同步',absent:'网页直接保存 · Excel可选',pending:'Excel待同步',syncing:'Excel同步中',idle:'Excel准备同步'})[w.status]||'Excel准备同步';
   return `<span class="sheet-sync ${synced?'synced':bad||w.status==='pending'?'warn':'neutral'}" title="${esc(w.status==='absent'?'点击网页维护即可在表内修改并保存，不需要创建Excel。':w.message||'Excel保存后自动同步')}" role="status"><i class="status-dot"></i>${label}</span>${bad?button('查看问题','workbook-status','small'):''}`;
 }
@@ -352,7 +389,7 @@ function planning() {
     const bp=ps.filter(p=>p.brand===b);if(!bp.length||rowHidden('brand',b))continue;
     rows+=planRow(bp,b,'brand',b,visible);
     for(const m of [...new Set(bp.map(p=>p.model))]) {
-      const mp=bp.filter(p=>p.model===m),id=`${b}|${m}`,opened=gridDraft?gridDraft.level==='version':allExpanded||expanded.has(id)||!!query;
+      const mp=bp.filter(p=>p.model===m),id=`${b}|${m}`,opened=allExpanded||expanded.has(id)||(!gridDraft&&!!query);
       if(rowHidden('model',id))continue;
       rows+=planRow(mp,m,'model',id,visible,opened);
       if(opened)rows+=planVersionRows(mp,visible);
@@ -361,11 +398,12 @@ function planning() {
   }
   rows+=gridNewRows('',visible);
   rows+=planRow(ps,brand?`${brand}合计`:showWenjie?'鸿蒙智行合计':'合计（不含问界）','total','',visible);
-  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">视图<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">代际<select id="generation-filter" title="参与汇总的代际只展示一组；未参与汇总的车型保留">${opt('detail','仅单代际',generationMode())}${opt('summary','仅汇总代际',generationMode())}</select></label><label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${visibleBrands().map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${button('网页维护','bulk-plan','primary small')}${button('车型与版本','manage-products','small')}${button(state.workbook_sync?.status==='absent'?'创建Excel（可选）':'Excel维护（可选）','open-workbook','small')}${state.workbook_sync?.status==='absent'?'':button('同步','sync-workbook','small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
-    <div class="sheet-tools"><div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划开放至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div><div class="toolbar"><label class="field inline-field">维护月份<select id="target-filter" ${editable.length?'':'disabled'}>${editable.length?editable.map(m=>opt(m,shortMonth(m),target)).join(''):'<option>未开放</option>'}</select></label>${button(wenjieToggleLabel(),'toggle-wenjie','small lock-toggle',`aria-pressed="${showWenjie}" title="点击${showWenjie?'隐藏':'显示'}问界，合计随展示范围变化"`)}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}" title="点击${showLocks?'隐藏':'显示'}车型及版本锁单数"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','ghost small')}</div></div>
-    ${viewControls()}${gridToolbar()}${generationWarnings()}<section class="card plan-card annual-sheet${gridDraft?' grid-editing'+(gridDraft.level==='model'?' grid-model-editing':''):''}${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===target?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length||gridDraft?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
+  $('#app').innerHTML=`<div class="annual-toolbar"><div class="annual-filters"><label class="field inline-field year-field">周期<select id="range-filter">${opt('rolling','M+6（滚动12个月）',range)}${opt('annual','全年',range)}</select></label>${rolling?'':`<label class="field inline-field year-field">年份<select id="year-filter">${years.map(y=>opt(y,`${y}年`,planYear)).join('')}</select></label>`}<label class="field inline-field">代际<select id="generation-filter" title="参与汇总的代际只展示一组；未参与汇总的车型保留">${opt('detail','仅单代际',generationMode())}${opt('summary','仅汇总代际',generationMode())}</select></label><label class="field inline-field">品牌<select id="brand-filter">${opt('','全部品牌',brand)}${visibleBrands().map(b=>opt(b,b,brand)).join('')}</select></label><label class="field inline-field">车型<select id="model-filter">${opt('','全部车型',model)}${models.map(m=>opt(m,m,model)).join('')}</select></label><label class="field inline-field annual-search"><span class="visually-hidden">搜索版本</span><input id="version-search" placeholder="搜索车型 / 版本" value="${esc(query)}"></label></div><div class="toolbar">${gridDraft?button(gridDraft.saving?'正在保存…':gridDraft.uncertain?'重试确认保存':'保存修改','grid-save','primary small',gridDraft.saving?'disabled':'')+button('取消','grid-cancel','small',gridLocked()?'disabled':''):button('网页维护','bulk-plan','primary small')}${button('导入Excel','import-plan','small')}${button('导出','export-plan','small')}</div></div>
+    <div class="sheet-tools">${viewControls()}<div class="toolbar display-toggles">${button(wenjieToggleLabel(),'toggle-wenjie','small lock-toggle',`aria-pressed="${showWenjie}" title="显示范围变化会更新合计"`)}${button(lockToggleLabel(),'toggle-locks','small lock-toggle',`aria-pressed="${showLocks}"`)}${button(allExpanded?'收起版本':'展开版本','expand-all','small')}</div></div>
+    <div class="sheet-meta"><span>销量截止：<strong>${esc(state.meta?.data_through_label||state.meta?.data_through||'待确认')}</strong></span><span>计划至：<strong>${shortMonth(state.plan_end)}</strong></span>${workbookStrip()}</div>
+    ${gridToolbar()}${generationWarnings()}<section class="card plan-card annual-sheet${gridDraft?' grid-editing':''}${rolling?' rolling-sheet':''}" aria-label="${rolling?'M+6':planYear+'年'}SOP计划表"><div class="table-scroll" tabindex="0" aria-label="${showLocks?'锁单和':''}SOP计划表，可横向滚动"><table class="plan-table" style="--plan-month-count:${visible.length}"><thead><tr><th scope="col" class="sticky-name">品牌 / 车型 / 版本</th><th scope="col" class="sticky-metric">指标</th>${visible.map((m,i)=>`<th scope="col" class="${m===state.current_month?'selected-month':''}${m<state.current_month?' past-month':''}" title="${m}${m<state.current_month?' · 已过去月份':''}${isPlanMonthOpen(m)?'':' · SOP未开放'}">${rolling?shortMonth(m):`${Number(m.slice(5))}月`}${rolling?`<span class="month-tag">${i<5?`M${i-5}`:i===5?'本月':`M+${i-5}`}</span>`:m===state.current_month?'<span class="month-tag">本月</span>':''}</th>${rolling&&m.endsWith('-12')?calendarPlanHeader(m.slice(0,4)):''}`).join('')}${rolling?'':`<th scope="col" class="annual-total">${planYear}年合计</th>`}</tr></thead><tbody>${ps.length||gridDraft?rows:`<tr><td colspan="${visible.length+3}" class="empty-state">没有符合筛选条件的版本</td></tr>`}</tbody></table></div></section>
     <div class="sheet-footnote"><span>— 暂无数据或待维护；0为明确零值；灰底为已过去月份；未开放月份不可维护。${rolling?'年度计划量统计对应年1—12月，含视图外月份；':''}合计仅累加已知值。</span><span>${showLocks?(modelLockBasis?'锁单取源表“交车锁单”车型汇总，未分配至版本。':versionLockBasis?`车型锁单取“交车锁单”行，版本锁单取“版本／数量”行；版本锁单最新来源月：${versionLockLatest?shortMonth(versionLockLatest):'暂无'}。`:''):'锁单数已隐藏，可用上方按钮打开。'}点击车型展开版本${showLocks?'锁单和':''}计划。</span></div>
-    ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;  if(gridDraft){$$('.annual-toolbar input,.annual-toolbar select,.sheet-tools input,.sheet-tools select').forEach(el=>el.disabled=true);$$('.annual-toolbar button,.sheet-tools button,.saved-view-strip button,.saved-view-panel button,.saved-view-panel input,.saved-view-panel select').forEach(el=>el.disabled=true);}
+    ${notes.length?`<details class="sheet-notes"><summary>数据口径与来源说明</summary>${notes.map(n=>`<p>${esc(n.message)}</p>`).join('')}</details>`:''}`;  if(gridDraft){$$('.annual-toolbar input,.annual-toolbar select,.saved-view-strip input,.saved-view-strip select,.saved-view-strip button,[data-action=toggle-wenjie],[data-action=import-plan],[data-action=export-plan]').forEach(el=>el.disabled=true);if(gridLocked())$$('[data-expand],[data-action=expand-all],[data-action=toggle-locks]').forEach(el=>el.disabled=true);}
 }
 function openDialog(html) { $('#edit-dialog').classList.toggle('catalog-dialog',html.includes('id="catalog-manager"')); $('#edit-dialog').classList.toggle('export-dialog',html.includes('id="export-plan-form"')||html.includes('id="import-plan-form"')); $('#dialog-content').innerHTML=html; const title=$('h2',$('#dialog-content'));if(title)title.id='dialog-title';$('#edit-dialog').showModal(); }
 function closeDialog() { $('#edit-dialog').close(); }
@@ -426,13 +464,30 @@ function renameModel() {
 function bulkPlan() {
   if(gridDraft)return;
   clearTimeout(searchTimer);
-  const rows=new Map(),modelRows=new Map(),ps=products().filter(p=>!p.read_only&&!productHidden(p));
-  for(const p of ps){const baselines=Object.fromEntries((state.plans||[]).filter(r=>r.product_id===p.id).map(r=>[r.month,{...r}]));rows.set(p.id,{id:p.id,original:{...p},isModel:isModelPlan(p),brand:p.brand,model:catalogModel(p),version:p.version,baselines,values:{},deleted:false,isNew:false});if(isModelPlan(p))modelRows.set(modelGroupKey(p),p.id);}
-  for(const p of ps){const group=modelGroupKey(p);if(modelRows.has(group))continue;const id='model_'+gridUUID();modelRows.set(group,id);rows.set(id,{id,isNew:true,isModel:true,virtual:true,brand:p.brand,model:p.model,version:modelPlanLabel,baselines:{},values:{},deleted:false});}
-  gridDraft={rows,modelRows,level:'model',owner,reason:'表内批量维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:''};
+  const rows=new Map(),modelRows=new Map(),groups=new Map();
+  for(const p of products().filter(p=>!p.read_only&&!rowHidden('brand',p.brand)&&!rowHidden('model',modelGroupKey(p)))){
+    const id=modelGroupKey(p);if(!groups.has(id))groups.set(id,{id,brand:p.brand,model:p.model,deleted:false});
+  }
+  // Whole-model operations include hidden versions; editing a single version
+  // still changes only that record. Hidden rows continue to affect totals.
+  const ps=state.products.filter(p=>!p.read_only&&groups.has(modelGroupKey(p)));
+  for(const p of ps){const group=modelGroupKey(p),baselines=Object.fromEntries((state.plans||[]).filter(r=>r.product_id===p.id).map(r=>[r.month,{...r}]));rows.set(p.id,{id:p.id,group,original:{...p},isModel:isModelPlan(p),brand:p.brand,model:catalogModel(p),version:p.version,baselines,values:{},deleted:false,isNew:false});if(isModelPlan(p))modelRows.set(group,p.id);}
+  for(const p of ps){const group=modelGroupKey(p);if(modelRows.has(group))continue;const id='model_'+gridUUID();modelRows.set(group,id);rows.set(id,{id,group,isNew:true,isModel:true,virtual:true,brand:p.brand,model:p.model,version:modelPlanLabel,baselines:{},values:{},deleted:false});}
+  gridDraft={rows,modelRows,groups,owner,reason:'网页维护',mode:generationMode(),signature:state.generation_view?.rule_signature||'',saving:false,uncertain:false,request:null,error:''};
   gridRender();$('#grid-owner')?.focus();
 }
 function editorOptions(id,ps=products()) {return ps.filter(p=>!p.read_only).map(p=>opt(p.id,`${p.brand} · ${p.model} · ${p.version}`,id)).join('');}
+async function editInGrid(id,month=state.current_month){
+  const product=state.products.find(p=>p.id===id);
+  if(!product||!canEditProduct(product,month))return toast('此行当前不可维护，请核对代际和月份',true);
+  if($('#edit-dialog')?.open)closeDialog();
+  page='planning';
+  if(!products().some(p=>p.id===id)){brand=product.brand;model=product.model;query='';}
+  if(!months().includes(month)){range='annual';planYear=month.slice(0,4);}
+  expanded.add(modelGroupKey(product));
+  await renderPage();bulkPlan();
+  $(`[data-grid-id="${id}"][data-grid-month="${month}"]`)?.focus();
+}
 function editPlan(id,month=target) {
   if(!isPlanMonthOpen(month))return toast('此月份不在已开放计划范围内',true);
   const p=state.products.find(p=>p.id===id); if(!p) return toast('请先选择一个版本',true);
@@ -635,7 +690,7 @@ function importPlans() {
   const showMaintenance=w=>{
     maintenanceBlocked=true;hasConflicts=false;
     const items=w.conflicts||[];
-    conflicts.innerHTML=`<p class="form-help">请先处理统一维护表的同步。以下选择作用于“Excel维护”的原始表；当前选中的导入文件已保留，稍后点击“导入计划”继续。</p>${items.length?planConflictTableHtml(items,true):''}<div class="dialog-actions import-conflict-actions">${items.length?'<button type="button" class="button secondary" data-maintenance-choice="db">维护表冲突保留网页值</button><button type="button" class="button primary" data-maintenance-choice="workbook">维护表冲突采用维护表值</button>':'<button type="button" class="button primary" data-maintenance-choice="retry">重新同步维护表</button>'}</div>`;
+    conflicts.innerHTML=`<p class="form-help">请先处理统一维护表的同步。以下选择作用于 input_file/SOP计划维护.xlsx；当前选中的导入文件已保留，稍后点击“导入计划”继续。</p>${items.length?planConflictTableHtml(items,true):''}<div class="dialog-actions import-conflict-actions">${items.length?'<button type="button" class="button secondary" data-maintenance-choice="db">维护表冲突保留网页值</button><button type="button" class="button primary" data-maintenance-choice="workbook">维护表冲突采用维护表值</button>':'<button type="button" class="button primary" data-maintenance-choice="retry">重新同步维护表</button>'}</div>`;
     $$('[data-maintenance-choice]',conflicts).forEach(el=>el.onclick=async()=>{
       if(pending)return;
       setBusy(true);progress.textContent='正在同步统一维护表…';error.textContent='';
@@ -703,7 +758,7 @@ function snapshotRows(d) {
 async function workbookStatusDialog() {
   const w=await api('/api/plan-workbook/status');
   if(w.status==='absent'){
-    openDialog(`<h2>尚未建立维护表</h2><p class="subtitle">点击“网页维护”即可直接在表内修改和保存，导出也可直接使用。只有点击“创建Excel（可选）”才会生成维护表。</p><p class="form-help">预定位置：${esc(w.path)}</p><div class="dialog-actions">${button('关闭','close-dialog')}${button('先导出模板','export-plan')}${button('创建Excel（可选）','open-workbook')}${button('网页维护','bulk-plan','primary')}</div>`);
+    openDialog(`<h2>尚未建立维护表</h2><p class="subtitle">网页维护和导出可直接使用。需要长期通过本地Excel同步时，再创建维护表。</p><p class="form-help">预定位置：${esc(w.path)}</p><div class="dialog-actions">${button('关闭','close-dialog')}${button('创建维护Excel','open-workbook')}</div>`);
     return;
   }
   openDialog(`<h2>计划表同步</h2><p class="subtitle">${esc(w.message||'')}</p><p class="form-help">维护表：${esc(w.path)}</p>${w.conflicts?.length?`<div class="table-scroll"><table class="detail-table"><thead><tr><th>版本 / 月份</th><th>共同基准</th><th>表格数值</th><th>网页当前值</th></tr></thead><tbody>${w.conflicts.map(c=>{const p=state.products.find(p=>p.id===c.product_id);return `<tr><td>${esc(p?.model||'')} ${esc(p?.version||c.product_id)}<small>${esc(conflictField(c))}${c.reason==='plans_changed'?'（导出后计划已更新）':''}</small></td><td>${conflictValue(c)(c.baseline)}</td><td>${conflictValue(c)(c.workbook)}</td><td>${conflictValue(c)(c.database)}</td></tr>`}).join('')}</tbody></table></div><p class="form-help">以下选择仅处理冲突项；没有冲突的修改仍按同一份计划合并。</p><div class="dialog-actions">${button('暂不处理','close-dialog')}${button('冲突项保留网页值','resolve-db')}${button('冲突项采用表格值','resolve-workbook','primary')}</div>`:`<p>保存Excel后自动读取；Excel占用文件时，网页的修改先保存在统一数据库，关闭Excel后回写。</p><div class="dialog-actions">${button('关闭','close-dialog')}${button('重新同步','sync-workbook','primary')}</div>`}`);
@@ -748,7 +803,7 @@ function editShipments(id=matchProduct||products().find(p=>!p.read_only)?.id) {
 }
 function dataPage() {
   const meta=state.meta,sources=state.sources?.length?state.sources:(meta.source_files||[]),q=meta.quality||[];
-  $('#app').innerHTML=heading('查看数据来源、导入质量与计划日历，保持业务口径一致。',button('车型与版本','manage-products')+button('刷新销量文件','refresh-sales','primary'))+
+  $('#app').innerHTML=heading('数据来源、Excel同步与计划规则。',button('来源与停用管理','manage-products')+button(state.workbook_sync?.status==='absent'?'创建维护Excel':'打开维护Excel','open-workbook')+(state.workbook_sync?.status==='absent'?'':button('同步Excel','sync-workbook'))+button('刷新销量文件','refresh-sales','primary'))+
     `<div class="two-col"><section class="card"><div class="panel-head"><div><h2>销量数据接入</h2><p>只更新历史参考，不覆盖人工计划</p></div><span class="badge good">已接入</span></div><div class="card-body"><dl class="info-list"><dt>文件目录</dt><dd>项目目录 / input_file</dd><dt>业务数据截至</dt><dd>${esc(meta.data_through||'待确认')}</dd><dt>自动更新</dt><dd>${esc(state.source_refresh?.message||'原始文件每分钟检查，保存稳定后自动读取')}</dd><dt>最近读取</dt><dd>${dateText(meta.generated_at)}</dd><dt>版本数量</dt><dd>${state.products.length} 个</dd><dt>参考口径</dt><dd>${meta.metrics.map(m=>esc(m.label)).join('、')}</dd></dl><h3>来源文件</h3><ul class="source-list">${sources.map(s=>`<li>${esc(typeof s==='string'?s:s.file||s.name||s.path||JSON.stringify(s))}${s.sheet?`<small>${esc(s.sheet)}</small>`:''}</li>`).join('')}</ul>${(meta.notes||[]).map(n=>`<p class="form-help">${esc(n)}</p>`).join('')}</div></section><section class="card"><div class="panel-head"><div><h2>计划与快照规则</h2><p>所有日期与截点使用北京时间</p></div></div><div class="card-body"><dl class="info-list"><dt>维护颗粒度</dt><dd>品牌 → 车型＋年款 × 月份；版本可选</dd><dt>本月计划口径</dt><dd>全月总量（含已发生部分）</dd><dt>年度扩展</dt><dd>每年9月开放到次年12月</dd><dt>当前计划截止</dt><dd>${shortMonth(state.plan_end)}</dd><dt>每天保存</dt><dd>24:00；周日24点快照同时用于考核</dd><dt>提前0周</dt><dd>月初周按周一至周日：月内超过4天取上周日，否则取当周日。2027年1月取1月3日24点。</dd></dl><label class="checkbox-field"><input id="bridge-toggle" type="checkbox" ${state.settings.bridge_m6!==false?'checked':''}>7、8月补足M+6（7月到次年1月，8月到次年2月）</label><p class="form-help">已确认7、8月补足M+6；每年9月扩展到次年12月。维护人姓名用于留痕，本机版不提供账号身份认证。</p>${button('保存规则','save-settings')}</div></section></div>`+
     `<section class="card page-section"><div class="panel-head"><div><h2>数据检查与口径说明</h2><p>显示来源实际包含的内容，不用推算代替历史数据</p></div></div><div class="card-body">${q.length?q.map(v=>`<div class="quality-row"><span class="badge ${v.status==='ok'||v.status==='passed'?'good':'neutral'}">${esc(v.level==='warning'?'待核对':v.status||'说明')}</span><span>${esc(typeof v==='string'?v:v.message||v.name||JSON.stringify(v))}</span></div>`).join(''):'<p>数据读取已完成。详细汇总与映射说明见来源记录。</p>'}<div class="callout">实际发货量由SP或IoC单独提供；预测销量、SOP计划量由负责人维护。未维护的数据不会自动补0。</div></div></section><section class="card page-section"><div class="panel-head"><div><h2>运行与留存</h2><p>本机服务提供持久保存，页面可以关闭</p></div></div><div class="card-body"><p>服务运行期间自动保存每日快照，电脑关机或服务退出期间无法实时执行；下次启动会依据修改日志还原截点，并标注实际生成时间。首次启用之前的计划历史不补造。</p><p class="form-help">计划与修改记录保存在本项目的 data/sop.sqlite3，表格只是同一数据的另一维护入口。需要多位同事共同维护时，应将同一服务部署到内网主机并配置身份访问。</p></div></section>`;
 }
@@ -762,10 +817,9 @@ async function handleAction(action,el) {
   if(action==='grid-save')return saveGrid();
   if(action==='grid-cancel'){if(gridLocked())return;gridDraft=null;planning();return;}
   if(action==='grid-add')return gridAddRow();
-  if(action==='view-panel'){viewPanelOpen=!viewPanelOpen;planning();return;}
   if(action==='view-save')return saveTableView();
   if(action==='view-apply')return applyTableView();
-  if(action==='view-delete'){tableViews.views=tableViews.views.filter(v=>v.id!==selectedView);if(tableViews.active===selectedView)tableViews.active='';selectedView='';persistTableViews();planning();return;}
+  if(action==='view-delete'){tableViews.views=tableViews.views.filter(v=>v.id!==selectedView);if(tableViews.active===selectedView)tableViews.active='';selectedView='';viewNameDraft=null;persistTableViews();planning();return;}
   if(action==='rows-restore'){hiddenRows={};refreshHiddenRows();return;}
 
   if(action==='close-dialog')return closeDialog();
@@ -788,9 +842,9 @@ async function handleAction(action,el) {
       toast(result.message||'计划表已同步',result.ok===false||result.status==='error');
     } finally {el.disabled=false;}return;
   }
-  if(action==='edit-first')return editPlan(products()[0]?.id);
+  if(action==='edit-first')return bulkPlan();
   if(action==='bulk-plan'){if($('#edit-dialog').open)closeDialog();return bulkPlan();}
-  if(action==='expand-all'){allExpanded=!allExpanded;return planning();}
+  if(action==='expand-all'){allExpanded=!allExpanded;expanded.clear();return gridDraft?gridRender():planning();}
   if(action==='toggle-locks'){
     const scroll=$('.plan-card .table-scroll'),left=scroll?.scrollLeft||0;
     showLocks=!showLocks;localStorage.setItem(lockPreferenceKey,String(showLocks));planning();
@@ -805,7 +859,7 @@ async function handleAction(action,el) {
     $('[data-action="toggle-wenjie"]').focus({preventScroll:true});return;
   }
   if(action==='import-plan')return importPlans();
-  if(action==='detail-edit'){closeDialog();return editPlan(el.dataset.product);}
+  if(action==='detail-edit'){closeDialog();return editInGrid(el.dataset.product);}
   if(action==='edit-shipments')return editShipments();
   if(action==='save-settings'){await api('/api/settings',{bridge_m6:$('#bridge-toggle').checked});await load();return toast('计划范围规则已保存');}
   if(action==='refresh-sales') {el.disabled=true;const text=el.textContent;el.textContent='正在读取…';try{await api('/api/refresh',{});await load();toast('销量已刷新，人工计划已保留');}finally{el.disabled=false;el.textContent=text;}return;}
@@ -847,8 +901,11 @@ document.addEventListener('click',async e=>{
   const el=e.target.closest('button');if(!el)return;
   try {
     if(el.dataset.gridRemove){gridRemoveRow(el.dataset.gridRemove);return;}
+    if(el.dataset.gridRemoveModel){gridRemoveModel(el.dataset.gridRemoveModel);return;}
     if('gridAddBrand' in el.dataset){gridAddRow(el.dataset.gridAddBrand,el.dataset.gridAddModel,el.dataset.gridAnchor);return;}
-    if(gridDraft&&!['grid-save','grid-cancel','grid-add'].includes(el.dataset.action)){toast('请先保存或取消表内修改，再进行其他操作',true);return;}
+    if(el.dataset.expand){if(!gridLocked())toggleModel(el.dataset.expand);return;}
+    if(gridDraft&&!['grid-save','grid-cancel','grid-add','expand-all','toggle-locks'].includes(el.dataset.action)){toast('请先保存或取消表内修改，再进行其他操作',true);return;}
+    if(gridLocked()&&['expand-all','toggle-locks'].includes(el.dataset.action))return;
     if(el.dataset.hideLevel){hideRow(el.dataset.hideLevel,el.dataset.hideId,el.dataset.hideLabel);return;}
     if(el.dataset.restoreRow){delete hiddenRows[el.dataset.restoreRow];refreshHiddenRows();return;}
     if(el.dataset.catalogBind){bindProductSource(el.dataset.catalogBind);return;}
@@ -856,8 +913,7 @@ document.addEventListener('click',async e=>{
     if(el.dataset.page){page=el.dataset.page;if(page==='matching')query='';await renderPage();return;}
     if('brand' in el.dataset){brand=el.dataset.brand;model='';matchProduct='';query='';selected=null;await renderPage();return;}
     if(el.dataset.range){range=el.dataset.range;planning();return;}
-    if(el.dataset.expand){expanded.has(el.dataset.expand)?expanded.delete(el.dataset.expand):expanded.add(el.dataset.expand);planning();return;}
-    if(el.dataset.edit){editPlan(el.dataset.edit,el.dataset.month);return;}
+    if(el.dataset.edit){await editInGrid(el.dataset.edit,el.dataset.month);return;}
     if(el.dataset.detail){await showDetail(el.dataset.detail);return;}
     if(el.dataset.snapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.snapshot)}`);renderSnapshot(currentSnapshot);return;}
     if(el.dataset.matchSnapshot){currentSnapshot=await api(`/api/snapshots/${encodeURIComponent(el.dataset.matchSnapshot)}`);page='history';await renderPage();return;}
@@ -867,10 +923,10 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('change',async e=>{
   try {
-    if(e.target.id==='grid-level'&&gridDraft&&!gridLocked()){gridDraft.level=e.target.value==='version'?'version':'model';gridRender();return;}
-    if(e.target.id==='saved-table-view'){selectedView=e.target.value;return;}
-    if(e.target.dataset.gridId||['grid-owner','grid-reason'].includes(e.target.id))return;
+    if(e.target.dataset.gridId||e.target.dataset.gridGroup||['grid-owner','grid-reason'].includes(e.target.id))return;
     if(gridDraft){toast('请先保存或取消表内修改',true);gridRender();return;}
+    if(e.target.id==='saved-table-view'){const prior=selectedView;try{selectedView=e.target.value;viewNameDraft=null;if(selectedView)applyTableView();else planning();}catch(error){selectedView=prior;e.target.value=prior;throw error;}return;}
+    if(e.target.id==='restore-hidden-row'){if(e.target.value){delete hiddenRows[e.target.value];refreshHiddenRows();}return;}
     if(e.target.id==='generation-filter'){await changeGenerationMode(e.target.value,e.target);return;}
     if(e.target.id==='range-filter'){range=e.target.value==='annual'?'annual':'rolling';planning();}
     if(e.target.id==='year-filter'){selectPlanYear(e.target.value);planning();}
@@ -878,14 +934,14 @@ document.addEventListener('change',async e=>{
     if(e.target.id==='model-filter'){model=e.target.value;selected=null;matchProduct='';await renderPage();}
     if(e.target.id==='history-range'){historyRange=e.target.value;planning();}
     if(e.target.id==='metric-filter'){metric=e.target.value;planning();}
-    if(e.target.id==='target-filter'){target=e.target.value;planning();}
     if(e.target.id==='match-month'){if(!e.target.value)return;matchMonth=e.target.value;await matchingPage();}
     if(e.target.id==='match-product'){matchProduct=e.target.value;await matchingPage();}
   }catch(err){toast(err.message,true);}
 });
 let searchTimer;
 document.addEventListener('input',e=>{
-  if(gridDraft){if(gridLocked())return;const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
+  if(gridDraft){if(gridLocked())return;if(e.target.dataset.gridGroup){gridChangeModel(e.target.dataset.gridGroup,e.target.dataset.gridGroupField,e.target.value);return;}const row=gridRow(e.target.dataset.gridId);if(row){if(e.target.dataset.gridMonth)row.values[e.target.dataset.gridMonth]=e.target.value;else if(e.target.dataset.gridField)row[e.target.dataset.gridField]=e.target.value;e.target.removeAttribute('aria-invalid');e.target.classList.add('changed');gridDraft.request=null;return;}if(e.target.id==='grid-owner'){gridDraft.owner=e.target.value;return;}if(e.target.id==='grid-reason'){gridDraft.reason=e.target.value;return;}return;}
+  if(e.target.id==='table-view-name'){viewNameDraft=e.target.value;return;}
   if(e.target.id==='version-search'){clearTimeout(searchTimer);query=e.target.value;searchTimer=setTimeout(async()=>{const pos=e.target.selectionStart;await renderPage();const inp=$('#version-search');if(inp){inp.focus();inp.setSelectionRange(pos,pos)}},300);}});
 $('#owner-btn')?.addEventListener('click',()=>{
   if(gridDraft)return toast('请在表内维护条填写维护人',true);

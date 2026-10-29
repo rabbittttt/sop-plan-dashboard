@@ -318,10 +318,10 @@ vm.runInContext(`
   };
   metric='locked_orders';indexData();planning();
 `,screenContext);
-assert.match(screen.innerHTML,/锁单数：已隐藏/);
+assert.match(screen.innerHTML,/data-action="toggle-locks" aria-pressed="false"/);
 assert.doesNotMatch(screen.innerHTML,/data-version="a"[^>]*data-plan-metric="locks"/);
 vm.runInContext("showLocks=true;expanded.add('问界|M5');planning()",screenContext);
-assert.match(screen.innerHTML,/锁单数：已显示/);
+assert.match(screen.innerHTML,/data-action="toggle-locks" aria-pressed="true"/);
 assert.match(screen.innerHTML,/版本锁单最新来源月：2026\.08/);
 assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="a"[^]*?版本原值">33<\/td>/);
 assert.match(screen.innerHTML,/data-plan-metric="locks" data-version="b"[^]*?版本原值">77<\/td>/);

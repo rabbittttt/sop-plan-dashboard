@@ -730,10 +730,6 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 }
 /* Main-table editing and browser-local saved views. */
 .saved-view-strip { display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:8px 0; color:#596678; font-size:13px; }
-.saved-view-panel { padding:12px; margin-bottom:10px; border:1px solid #c8d3df; background:#f6f9fc; }
-.saved-view-panel .toolbar { flex-wrap:wrap; align-items:end; }
-.saved-view-panel .field { min-width:150px; }
-.hidden-row-list { display:flex; flex-wrap:wrap; gap:8px; padding-top:10px; color:#66717e; }
 .row-visibility { border:0; background:transparent; color:#526b86; padding:5px 7px; margin-left:5px; font-size:12px; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
 .row-visibility:hover { color:#075e9b; background:#e5f0fa; }
 .row-visibility:focus-visible { outline:2px solid #0871b8; outline-offset:2px; }
@@ -775,10 +771,9 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .sheet-tools { margin-bottom:3px; gap:4px 10px; }
 .sheet-meta { gap:4px 10px; font-size:11px; }
 .saved-view-strip { padding:3px 0; font-size:12px; }
-.saved-view-panel,.grid-toolbar { padding:8px; margin-bottom:6px; }
+.grid-toolbar { padding:8px; margin-bottom:6px; }
 .grid-toolbar p { margin-top:5px; font-size:12px; }
 .grid-toolbar .field { gap:3px; }
-.hidden-row-list { gap:5px; padding-top:6px; }
 .annual-sheet .table-scroll { max-height:calc(100vh - 172px); }
 .annual-sheet.grid-editing .table-scroll { max-height:calc(100vh - 260px); }
 .annual-sheet .plan-table thead tr:first-child > th { height:34px; padding:4px; }
@@ -790,7 +785,6 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .grid-row-labels input { height:27px; }
 .grid-row-labels.model-labels { grid-template-columns:60px 1fr; }
 .grid-row-labels.model-labels label { grid-column:auto; }
-.annual-sheet.grid-model-editing { --plan-name-width:200px; }
 .grid-quantity::placeholder { font-size:11px; font-weight:400; }
 .annual-sheet .grid-quantity { height:28px; }
 .grid-row-actions { margin-top:3px; gap:5px; }
@@ -803,3 +797,34 @@ dialog.export-dialog { width: min(720px, calc(100vw - 32px)); padding: 24px; }
 .stat-card,.card.padded,.padded { padding:12px; }
 .page-section { margin-bottom:12px; }
 @media(max-width:700px) { .app-header { padding:4px 9px 0; gap:0 8px; } #app { padding:6px 8px; } .annual-sheet .table-scroll { max-height:68vh; } }
+
+/* One work surface: visible view actions and contextual editing in the grid. */
+.sheet-tools { align-items:center; gap:4px 12px; margin-bottom:3px; }
+.saved-view-strip { gap:5px; padding:0; }
+.saved-view-strip .field select { max-width:130px; }
+.saved-view-strip .view-name input { width:110px; }
+.display-toggles { gap:5px; }
+.sheet-meta { margin:3px 0 5px; min-height:16px; }
+.grid-toolbar .field { min-width:0; max-width:none; }
+.grid-toolbar .field input { width:110px; }
+.grid-toolbar #grid-reason { width:160px; }
+.grid-toolbar .toolbar { align-items:center; }
+.grid-hint { font-size:12px; color:#425a70; }
+.annual-sheet.grid-editing { --plan-name-width:260px; }
+.grid-editing .plan-table .version-row .sticky-name { padding:3px 8px; }
+.grid-row-labels.version-labels { display:flex; align-items:center; }
+.grid-row-labels.version-labels label { flex:1; }
+.grid-row-labels .grid-remove { min-width:42px; }
+.grid-row-actions { flex-wrap:nowrap; }
+.grid-row-actions .button { padding:3px 5px; }
+.annual-sheet.grid-editing .table-scroll { max-height:calc(100vh - 228px); }
+@media(max-width:700px) {
+  .sheet-tools { align-items:stretch; }
+  .saved-view-strip { gap:5px; }
+  .saved-view-strip .view-name input { width:102px; }
+  .annual-sheet.grid-editing { --plan-name-width:232px; }
+  .grid-row-labels.model-labels label { grid-column:auto; }
+  .grid-hint { flex-basis:100%; }
+  .annual-sheet.grid-editing .table-scroll { max-height:65vh; }
+}
+@media print { .sheet-tools,.grid-row-actions { display:none!important; } }
