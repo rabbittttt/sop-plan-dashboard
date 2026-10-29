@@ -9,7 +9,11 @@ import json
 import logging
 import mimetypes
 import os
+import signal
+import socket
 import threading
+import webbrowser
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -24,6 +28,44 @@ from sop_source_rules import MergeRuleError
 
 ROOT = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("sop")
+
+
+class WorkbenchHTTPServer(ThreadingHTTPServer):
+    launch_mode = "console"
+    daemon_threads = True
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            # A second Windows console must not bind the same port and start
+            # another writer for the same database and maintenance workbook.
+            self.allow_reuse_address = False
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def workbench_running(host, port):
+    connection = HTTPConnection(host, port, timeout=2)
+    try:
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        health = json.loads(response.read(16384))
+        return (response.status == 200 and isinstance(health, dict)
+                and health.get("app_id") == "hima-sop"
+                and health.get("workspace") == str(ROOT)
+                and health.get("launch_mode") == "console")
+    except (OSError, HTTPException, ValueError):
+        return False
+    finally:
+        connection.close()
+
+
+def open_workbench(url):
+    try:
+        if webbrowser.open(url, new=2):
+            return
+    except (OSError, webbrowser.Error):
+        pass
+    print(f"未能自动打开浏览器，请手动访问：{url}", flush=True)
 
 
 def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None, plan_export=None, source_refresh=None, plan_roundtrip=None):
@@ -118,7 +160,8 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
             query = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
             try:
                 if path == "/api/health":
-                    self._json({"app_id": "hima-sop", "workspace": str(ROOT), "port": port})
+                    self._json({"app_id": "hima-sop", "workspace": str(ROOT), "port": port,
+                                "pid": os.getpid(), "launch_mode": getattr(self.server, "launch_mode", None)})
                 elif path == "/api/state":
                     state = store.state()
                     state["source_refresh"] = source_refresh.status()
@@ -324,64 +367,85 @@ def make_handler(store, web_root, port, workbook_sync=None, snapshot_backup=None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="本机 SOP 计划看板")
+    parser = argparse.ArgumentParser(description="SOP计划工作台：保持窗口运行，关闭窗口即停止")
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     parser.add_argument("--port", type=int, default=8876)
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--web-dir", type=Path, default=ROOT / "web")
     parser.add_argument("--plan-file", type=Path, default=plan_workbook_path(ROOT))
+    parser.add_argument("--open-browser", action="store_true", help="就绪后自动打开工作台网页")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    # Bind before touching persistent data, so a busy port fails without starting a second writer.
-    server = ThreadingHTTPServer((args.host, args.port), BaseHTTPRequestHandler)
-    server.daemon_threads = True
-    args.data_dir.mkdir(parents=True, exist_ok=True)
-    if not (args.data_dir / "sales.json").exists():
-        importlib.import_module("sop_data").refresh(output_path=args.data_dir / "sales.json")
-    store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
-    store.ensure_daily_snapshots()
-    workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False)
-    workbook_sync.sync()
-    source_refresh = SalesRefresh(store, workbook_sync, root=ROOT)
-    snapshot_backup = SnapshotBackup(store)
-    stop = threading.Event()
-
-    def daily_worker():
-        while not stop.wait(8):
-            try:
-                store.ensure_daily_snapshots()
-                workbook_sync.sync()
-                source_refresh.poll()
-            except Exception:
-                LOGGER.exception("Daily snapshot failed; will retry")
-
-    worker = threading.Thread(target=daily_worker, name="daily-snapshot", daemon=True)
-    worker.start()
-
-    def backup_worker():
-        while not stop.is_set():
-            try:
-                attempted = snapshot_backup.export_pending(limit=1)
-            except Exception:
-                LOGGER.exception("Excel snapshot backup failed; will retry")
-                attempted = 0
-            stop.wait(1 if attempted else 8)
-
-    backup_thread = threading.Thread(target=backup_worker, name="snapshot-excel-backup", daemon=True)
-    backup_thread.start()
-    server.RequestHandlerClass = make_handler(store, args.web_dir, args.port, workbook_sync, snapshot_backup, source_refresh=source_refresh)
-    LOGGER.info("SOP 看板已启动：http://%s:%s", args.host, args.port)
+    url = f"http://{args.host}:{args.port}"
+    # Bind before touching persistent data, so a busy port cannot start a second writer.
     try:
+        server = WorkbenchHTTPServer((args.host, args.port), BaseHTTPRequestHandler)
+    except OSError as error:
+        if workbench_running(args.host, args.port):
+            print("工作台已在另一个窗口运行；请保留原窗口，关闭原窗口即可停止。", flush=True)
+            if args.open_browser:
+                open_workbench(url)
+            return 0
+        print(f"无法启动工作台：端口 {args.port} 不可用（{error}）。其他服务未受影响。", flush=True)
+        return 1
+
+    # Ctrl+C and Ctrl+Break both follow the ordinary foreground shutdown path.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal.default_int_handler)
+    stop, workers, store = threading.Event(), [], None
+    try:
+        args.data_dir.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                            handlers=[logging.StreamHandler(), logging.FileHandler(
+                                args.data_dir / "service.err.log", encoding="utf-8")], force=True)
+        if not (args.data_dir / "sales.json").exists():
+            importlib.import_module("sop_data").refresh(output_path=args.data_dir / "sales.json")
+        store = SOPStore(args.data_dir / "sop.sqlite3", args.data_dir / "sales.json")
+        store.ensure_daily_snapshots()
+        workbook_sync = WorkbookSync(store, args.plan_file, auto_create=False)
+        workbook_sync.sync()
+        source_refresh = SalesRefresh(store, workbook_sync, root=ROOT)
+        snapshot_backup = SnapshotBackup(store)
+
+        def daily_worker():
+            while not stop.wait(8):
+                try:
+                    store.ensure_daily_snapshots()
+                    workbook_sync.sync()
+                    source_refresh.poll()
+                except Exception:
+                    LOGGER.exception("Daily snapshot failed; will retry")
+
+        def backup_worker():
+            while not stop.is_set():
+                try:
+                    attempted = snapshot_backup.export_pending(limit=1)
+                except Exception:
+                    LOGGER.exception("Excel snapshot backup failed; will retry")
+                    attempted = 0
+                stop.wait(1 if attempted else 8)
+
+        for name, target in (("daily-snapshot", daily_worker), ("snapshot-excel-backup", backup_worker)):
+            worker = threading.Thread(target=target, name=name, daemon=True)
+            worker.start()
+            workers.append(worker)
+        server.RequestHandlerClass = make_handler(store, args.web_dir, args.port, workbook_sync,
+                                                  snapshot_backup, source_refresh=source_refresh)
+        print(f"\nSOP计划工作台已就绪：{url}\n保持此窗口打开；关闭窗口或按 Ctrl+C 即停止。\n关闭浏览器页面不会停止工作台。\n", flush=True)
+        if args.open_browser:
+            threading.Thread(target=open_workbench, args=(url,), name="open-browser", daemon=True).start()
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
         stop.set()
         server.server_close()
-        worker.join(timeout=2)
-        backup_thread.join(timeout=2)
-        store.close()
+        for worker in workers:
+            worker.join(timeout=2)
+        if store is not None:
+            store.close()
+        print("SOP计划工作台已停止。", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
