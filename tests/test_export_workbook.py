@@ -209,7 +209,7 @@ class ExportWorkbookTest(unittest.TestCase):
                 # Only chosen months are shown, with the full calendar year SOP after December.
                 self.assertEqual([s.cell(4, first + i).value for i in range(5)], ["8月", "10月", "12月", "年度合计", "2月"])
                 self.assertEqual(s.max_column, first + 4, "No extra metric/notes column")
-                self.assertEqual(s["A1"].value, "SOP计划")
+                self.assertEqual(s["A1"].value, "SOP计划表")
                 self.assertEqual(s.cell(1, first).value, "2026-08—2027-02")
                 self.assertFalse(any(c.value in ("指标", "数据说明", "说明索引") for row in s for c in row))
                 total = next(r for r in range(5, s.max_row + 1) if s.cell(r, 1).value == "总计")

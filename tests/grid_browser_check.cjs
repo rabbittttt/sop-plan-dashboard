@@ -217,6 +217,7 @@ async function main() {
     await page.reload();
     await page.locator('[data-action="bulk-plan"]').waitFor();
     assert.equal(await page.locator('.annual-heading').count(),0);
+    assert.equal(await page.locator('h1.plan-title').innerText(),'SOP计划表');
     const tableTop=(await page.locator('.plan-card').boundingBox()).y;
     assert.ok(tableTop<240,`Compact table starts at ${tableTop}px`);
     const modelCell=()=>page.locator('[data-grid-model="S9 2026款"][data-grid-month="2026-10"]');

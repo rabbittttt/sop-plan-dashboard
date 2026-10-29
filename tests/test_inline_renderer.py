@@ -148,7 +148,7 @@ class InlineRendererTest(unittest.TestCase):
         self.assertFalse(wb["_sop_import"]["B3"].value)
         sheet = wb["SOP计划"]
         self.assertTrue(sheet.protection.sheet)
-        self.assertEqual(sheet["A1"].value, "SOP计划")
+        self.assertEqual(sheet["A1"].value, "SOP计划表")
         self.assertEqual(sheet["C1"].value, "2026-12")
         self.assertEqual(sheet["A5"].value, "智界")
         self.assertIn("A5:A6", {str(area) for area in sheet.merged_cells.ranges})

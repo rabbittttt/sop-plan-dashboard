@@ -64,7 +64,7 @@ class PresentationRevisionTest(unittest.TestCase):
                 self.assertNotEqual(new_token, old_token)
                 refreshed = load_workbook(path, read_only=False)
                 try:
-                    self.assertEqual(refreshed["SOP计划"]["A1"].value, "SOP计划")
+                    self.assertEqual(refreshed["SOP计划"]["A1"].value, "SOP计划表")
                     self.assertEqual(refreshed["SOP计划"]["D1"].value, "2026-01—2027-12")
                     self.assertIn("A1:C1", {str(area) for area in refreshed["SOP计划"].merged_cells.ranges})
                 finally:

@@ -13,6 +13,7 @@ from openpyxl.utils import get_column_letter
 
 
 INK = "243649"
+PLAN_TITLE = "SOP计划表"
 BLUE = "0871B8"
 TITLE_BLUE = "086BAE"
 WHITE = "FFFFFF"

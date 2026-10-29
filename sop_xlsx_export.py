@@ -17,7 +17,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from sop_brand import brand_order_key
 from sop_plan_scope import MODEL_PLAN_LABEL
-from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
+from sop_xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 MAX_SAFE_INTEGER = 2**53 - 1
@@ -47,7 +47,7 @@ def _text(cell, value):
 
 
 def _title():
-    return "SOP计划"
+    return PLAN_TITLE
 
 
 def _period(months):

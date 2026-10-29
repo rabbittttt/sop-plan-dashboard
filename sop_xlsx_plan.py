@@ -13,7 +13,7 @@ from openpyxl.styles import Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from sop_xlsx_style import plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
+from sop_xlsx_style import PLAN_TITLE, plan_guidance, setup_plan_sheet, style_plan_row, write_formula_caches
 
 
 _SUM_FORMULA = re.compile(r'^=IF\(COUNT\((.+)\)=0,"",SUM\(\1\)\)$')
@@ -104,7 +104,7 @@ def write_plan_workbook(payload: dict) -> None:
         setup_plan_sheet(sheet, last_row=spec["last_row"], last_column=spec["last_column"],
                          visible_last_column=spec["visible_last_column"], columns=columns,
                          header_row=spec["header_row"], first_data_row=spec["first_data_row"])
-        _literal(sheet.cell(1, 1), "SOP计划")
+        _literal(sheet.cell(1, 1), PLAN_TITLE)
         _literal(sheet.cell(1, 4), f"{payload['months'][0]}—{payload['months'][-1]}")
         _literal(sheet.cell(2, 1), plan_guidance(has_readonly=any(p.get("read_only") for p in payload["products"])))
         for offset, header in enumerate(spec["headers"]):

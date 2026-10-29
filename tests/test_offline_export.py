@@ -101,7 +101,7 @@ class OfflineExportTest(unittest.TestCase):
             self.assertEqual(book.sheetnames, ["SOP计划", "_sop_import"])
             self.assertEqual(book["_sop_import"].sheet_state, "veryHidden")
             sheet = book["SOP计划"]
-            self.assertEqual(sheet["A1"].value, "SOP计划")
+            self.assertEqual(sheet["A1"].value, "SOP计划表")
             self.assertEqual(sheet["D1"].value, "2026-10—2026-12")
             self.assertIn("A1:C1", {str(item) for item in sheet.merged_cells.ranges})
             self.assertIn("D1:F1", {str(item) for item in sheet.merged_cells.ranges})
@@ -156,7 +156,7 @@ class OfflineExportTest(unittest.TestCase):
         book = openpyxl.load_workbook(self.path)
         try:
             sheet = book["SOP计划"]
-            self.assertEqual(sheet["A1"].value, "SOP计划")
+            self.assertEqual(sheet["A1"].value, "SOP计划表")
             self.assertEqual(sheet["C1"].value, "2026-10—2026-12")
             self.assertEqual(sheet["A5"].value, "A")
             self.assertIn("A5:A6", {str(item) for item in sheet.merged_cells.ranges})

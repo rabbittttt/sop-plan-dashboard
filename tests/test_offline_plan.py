@@ -76,7 +76,7 @@ class OfflinePlanWorkbookTest(unittest.TestCase):
         workbook = load_workbook(self.path, data_only=True)
         self.addCleanup(workbook.close)
         sheet = workbook["SOP计划"]
-        self.assertEqual(sheet["A1"].value, "SOP计划")
+        self.assertEqual(sheet["A1"].value, "SOP计划表")
         self.assertEqual(sheet["D1"].value, "2026-01—2027-12")
         self.assertIn("A1:C1", {str(area) for area in sheet.merged_cells.ranges})
         self.assertEqual(sheet.freeze_panes, "D5")

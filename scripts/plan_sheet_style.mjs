@@ -9,7 +9,7 @@ export function column(n) {
 }
 
 export function planTitle() {
-  return 'SOP计划';
+  return 'SOP计划表';
 }
 
 export function planPeriod(months) {

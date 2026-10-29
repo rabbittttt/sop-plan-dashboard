@@ -24,7 +24,7 @@ SCHEMA_VERSION = 5
 LAYOUT_VERSION = "continuous-inline-v2"
 # Bump this when managed workbook rendering or Excel compatibility changes
 # without changing its trusted cell map. Old exports resolve to revision 0.
-PRESENTATION_VERSION = 6
+PRESENTATION_VERSION = 7
 PREVIOUS_CONTINUOUS_LAYOUT = "continuous-blue-v2"
 LEGACY_CONTINUOUS_LAYOUT = "continuous-blue-v1"
 LEGACY_ANNUAL_LAYOUT = "annual-blue-v1"
